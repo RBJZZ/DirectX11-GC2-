@@ -1,0 +1,33 @@
+# Blender 4.4.3 MTL File: 'Blender.blend'
+# www.blender.org
+
+newmtl Gum_bark_Mat.001
+Ns 62.500000
+Ka 1.000000 1.000000 1.000000
+Ks 0.009091 0.009091 0.009091
+Ke 0.000000 0.000000 0.000000
+Ni 1.450000
+d 1.000000
+illum 2
+map_Kd Gum_bark.png
+map_Bump -bm 0.500000 Gum_bark_Normal.png
+
+newmtl Leaf_green_Mat
+Ns 62.500000
+Ka 1.000000 1.000000 1.000000
+Ks 0.213636 0.213636 0.213636
+Ke 0.000000 0.000000 0.000000
+Ni 1.450000
+d 1.000000
+illum 2
+map_Kd leaf.png
+
+newmtl tree_branches_basecolor_2_Mat.001
+Ns 62.500000
+Ka 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.450000
+d 1.000000
+illum 1
+map_Kd tree_branches.png

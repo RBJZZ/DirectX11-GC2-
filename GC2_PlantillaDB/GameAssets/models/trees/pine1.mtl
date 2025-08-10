@@ -1,0 +1,22 @@
+# Blender 4.4.3 MTL File: 'None'
+# www.blender.org
+
+newmtl Bark01_SHD
+Ns 10.000005
+Ka 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 1
+map_Kd CL04_Bark01_dif_su.png
+
+newmtl Leaf01_su_SHD
+Ns 10.000005
+Ka 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 1
+map_Kd CL04_Leaf01Front_dif_su.png
+map_d CL04_Leaf01_alp_su.png
