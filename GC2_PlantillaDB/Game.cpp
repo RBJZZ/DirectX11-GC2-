@@ -350,6 +350,10 @@ void Game::Render()
     RenderShadowPass();
     m_deviceResources->PIXEndEvent();
 
+    m_deviceResources->PIXBeginEvent(L"Render Minimap");
+    RenderMinimapPass();
+    m_deviceResources->PIXEndEvent();
+
     Clear();
 
     m_deviceResources->PIXBeginEvent(L"Render");
@@ -555,6 +559,25 @@ void Game::Render()
 
         m_font->DrawString(m_spriteBatch.get(), buffer, textPosition, textColor);
 
+        RECT minimapRect = { 10, 150, 10 + MINIMAP_SIZE, 150 + MINIMAP_SIZE };
+        m_spriteBatch->Draw(m_minimapSRV.Get(), minimapRect);
+
+        // 2. Dibuja el icono del jugador en el centro del minimapa
+        ComPtr<ID3D11Resource> playerIconResource;
+        m_playerIconTexture->GetResource(playerIconResource.GetAddressOf());
+        ComPtr<ID3D11Texture2D> playerIconTex2D;
+        playerIconResource.As(&playerIconTex2D);
+        CD3D11_TEXTURE2D_DESC iconDesc;
+        playerIconTex2D->GetDesc(&iconDesc);
+
+        Vector2 playerIconOrigin = Vector2(iconDesc.Width / 2.f, iconDesc.Height / 2.f);
+        Vector2 playerIconPos = Vector2(minimapRect.left + MINIMAP_SIZE / 2.f, minimapRect.top + MINIMAP_SIZE / 2.f);
+
+        // Rotamos el icono segn el Yaw de la cmara
+        float playerRotation = -m_camera->GetYaw();
+
+        m_spriteBatch->Draw(m_playerIconTexture.Get(), playerIconPos, nullptr, Colors::White, playerRotation, playerIconOrigin);
+
         m_spriteBatch->End(); // Finaliza el lote y dibuja los sprites
     }
     m_deviceResources->PIXEndEvent();
@@ -667,6 +690,52 @@ void Game::CreateDeviceDependentResources()
     auto context = m_deviceResources->GetD3DDeviceContext();
     HRESULT hr;
 
+    D3D11_TEXTURE2D_DESC minimapTexDesc = {};
+    minimapTexDesc.Width = MINIMAP_SIZE;
+    minimapTexDesc.Height = MINIMAP_SIZE;
+    minimapTexDesc.MipLevels = 1;
+    minimapTexDesc.ArraySize = 1;
+    minimapTexDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; // Textura de color estndar
+    minimapTexDesc.SampleDesc.Count = 1;
+    minimapTexDesc.Usage = D3D11_USAGE_DEFAULT;
+    // IMPORTANTE: Debe poder ser un Render Target Y un Shader Resource
+    minimapTexDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+
+    hr = device->CreateTexture2D(&minimapTexDesc, nullptr, m_minimapTexture.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear la textura del minimapa.");
+
+    // Crear la Vista de Render Target (RTV)
+    hr = device->CreateRenderTargetView(m_minimapTexture.Get(), nullptr, m_minimapRTV.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el RTV del minimapa.");
+
+    // Crear la Vista de Shader Resource (SRV)
+    hr = device->CreateShaderResourceView(m_minimapTexture.Get(), nullptr, m_minimapSRV.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el SRV del minimapa.");
+
+    // Definir el viewport para el minimapa
+    m_minimapViewport = { 0.0f, 0.0f, MINIMAP_SIZE, MINIMAP_SIZE, 0.0f, 1.0f };
+
+    // Cargar el icono del jugador
+    hr = CreateWICTextureFromFile(device, L"GameAssets\\textures\\player.png", nullptr, m_playerIconTexture.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al cargar el icono del jugador.");
+
+    D3D11_TEXTURE2D_DESC depthTexDesc = {};
+    depthTexDesc.Width = MINIMAP_SIZE;
+    depthTexDesc.Height = MINIMAP_SIZE;
+    depthTexDesc.MipLevels = 1;
+    depthTexDesc.ArraySize = 1;
+    depthTexDesc.Format = DXGI_FORMAT_D32_FLOAT; // Formato de profundidad estndar
+    depthTexDesc.SampleDesc.Count = 1;
+    depthTexDesc.Usage = D3D11_USAGE_DEFAULT;
+    depthTexDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL; // Solo se usa para profundidad/stencil
+
+    hr = device->CreateTexture2D(&depthTexDesc, nullptr, m_minimapDepthTexture.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear la textura de profundidad del minimapa.");
+
+    // Crear la Vista de Profundidad/Stencil (DSV)
+    hr = device->CreateDepthStencilView(m_minimapDepthTexture.Get(), nullptr, m_minimapDSV.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el DSV del minimapa.");
+
     m_states = std::make_unique<DirectX::CommonStates>(device);
     m_samplerState = m_states->LinearWrap();
 
@@ -679,6 +748,20 @@ void Game::CreateDeviceDependentResources()
     if (FAILED(hr)) { 
         throw std::runtime_error("Failed to create light properties constant buffer.");
     }
+
+    hr = device->CreateBuffer(&cbd_lights, nullptr, m_minimapLightPropertiesCB.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) {
+        throw std::runtime_error("Fallo al crear el constant buffer de luces del minimapa.");
+    }
+
+    // Definimos una iluminacin brillante y uniforme para el minimapa
+    // Luz ambiental muy alta para que todo sea visible
+    m_minimapLightData.ambientLightColor = DirectX::SimpleMath::Vector4(0.8f, 0.8f, 0.8f, 1.0f);
+    // Una luz direccional suave desde arriba solo para dar un poco de definicin
+    m_minimapLightData.directionalLightVector = DirectX::SimpleMath::Vector3(0.0f, -1.0f, 0.0f);
+    m_minimapLightData.directionalLightColor = DirectX::SimpleMath::Vector4(0.5f, 0.5f, 0.5f, 1.0f);
+    // La posicin de la cmara no es crtica para esta iluminacin
+    m_minimapLightData.cameraPositionWorld = DirectX::SimpleMath::Vector3::Zero;
 
 
     m_cube = DirectX::GeometricPrimitive::CreateCube(context, 1.0f);
@@ -1412,3 +1495,62 @@ void Game::RenderShadowPass()
 
 #pragma endregion
 
+#pragma region minimap
+
+void Game::RenderMinimapPass()
+{
+    auto context = m_deviceResources->GetD3DDeviceContext();
+
+    // 1. Subir los datos de luz del minimapa a su Constant Buffer
+    D3D11_MAPPED_SUBRESOURCE mappedResource;
+    HRESULT hr = context->Map(m_minimapLightPropertiesCB.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+    if (SUCCEEDED(hr))
+    {
+        memcpy(mappedResource.pData, &m_minimapLightData, sizeof(PSLightPropertiesData));
+        context->Unmap(m_minimapLightPropertiesCB.Get(), 0);
+    }
+
+    // 2. Configurar la pipeline para renderizar AL MINIMAPA
+    context->OMSetRenderTargets(1, m_minimapRTV.GetAddressOf(), m_minimapDSV.Get());
+    context->ClearRenderTargetView(m_minimapRTV.Get(), Colors::DarkSlateGray);
+    context->ClearDepthStencilView(m_minimapDSV.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
+    context->RSSetViewports(1, &m_minimapViewport);
+
+    // 3. Configurar la "cmara" del minimapa
+    Vector3 playerPos = m_camera->GetPosition();
+    Vector3 mapCamPos = Vector3(playerPos.x, playerPos.y - 200.f, playerPos.z);
+    Vector3 mapCamTarget = playerPos;
+    Matrix minimapView = Matrix::CreateLookAt(mapCamPos, mapCamTarget, Vector3::Forward);
+    Matrix minimapProj = Matrix::CreateOrthographic(100.f, 100.f, 1.0f, 400.0f);
+
+    // 4. Dibujar la escena en el minimapa USANDO LA LUZ DEL MINIMAPA
+    if (m_terrain)
+    {
+        m_terrain->SetViewMatrix(minimapView);
+        m_terrain->SetProjectionMatrix(minimapProj);
+      
+        // Le pasamos el sampler real, aunque la textura sea nula.
+        m_terrain->Render(context, m_minimapLightPropertiesCB.Get(), m_samplerState.Get(), playerPos, m_lightViewMatrix * m_lightProjectionMatrix, nullptr, m_shadowSamplerState.Get());
+    }
+
+    for (const auto& instance : m_worldInstances)
+    {
+        if (instance.baseModel)
+        {
+            // Le pasamos el sampler real, aunque la textura sea nula.
+            instance.baseModel->EvolvingDraw(
+                context,
+                minimapView,
+                minimapProj,
+                m_minimapLightPropertiesCB.Get(),
+                m_samplerState.Get(),
+                m_lightViewMatrix,
+                m_lightProjectionMatrix,
+                nullptr,
+                m_shadowSamplerState.Get()
+            );
+        }
+    }
+}
+
+#pragma endregion

@@ -84,6 +84,7 @@ private:
     );
 
     void RenderShadowPass();
+    void RenderMinimapPass();
     // Device resources.
     std::unique_ptr<DX::DeviceResources> m_deviceResources;
 
@@ -160,6 +161,10 @@ private:
     // Model instances
     std::vector<GameObjectInstance> m_worldInstances;
 
+    // Iluminacin exclusiva para el minimapa
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_minimapLightPropertiesCB;
+    PSLightPropertiesData m_minimapLightData;
+
     // Shadow mapping
     Microsoft::WRL::ComPtr<ID3D11Texture2D>           m_shadowMapTexture;
     Microsoft::WRL::ComPtr<ID3D11DepthStencilView>  m_shadowMapDSV;
@@ -181,5 +186,14 @@ private:
 
     static const int SHADOW_MAP_SIZE = 4096;
 
+    // Minimap Resources
+    Microsoft::WRL::ComPtr<ID3D11Texture2D>           m_minimapTexture;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView>  m_minimapRTV;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_minimapSRV;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D>           m_minimapDepthTexture; // <--- AADE ESTA LNEA
+    Microsoft::WRL::ComPtr<ID3D11DepthStencilView>  m_minimapDSV;          // <--- AADE ESTA LNEA
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_playerIconTexture;
+    D3D11_VIEWPORT                                   m_minimapViewport;
+    static const int MINIMAP_SIZE = 256;
 
 };
