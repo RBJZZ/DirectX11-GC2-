@@ -7,6 +7,7 @@
 #include <string>
 #include <VertexTypes.h>
 #include <Effects.h>
+#include "Model.h"
 
 // Estructura de vértice para el terreno (puedes expandirla después)
 using TerrainVertex = DirectX::VertexPositionNormalTexture;
@@ -26,16 +27,21 @@ public:
         const wchar_t* terrainPS_path);
 
     void Render(ID3D11DeviceContext* context,
-        ID3D11Buffer* lightPropertiesCB, 
-        ID3D11SamplerState* samplerState, 
-        const DirectX::SimpleMath::Vector3& cameraPositionWorld); 
+        ID3D11Buffer* lightPropertiesCB,
+        ID3D11SamplerState* samplerState,
+        const DirectX::SimpleMath::Vector3& cameraPositionWorld,
+        const DirectX::SimpleMath::Matrix& lightViewProjMatrix,
+        ID3D11ShaderResourceView* shadowMapSRV,
+        ID3D11SamplerState* shadowSampler
+    );
 
     struct CBTerrainVSData
     {
         DirectX::SimpleMath::Matrix World;
         DirectX::SimpleMath::Matrix ViewProjection;
-        float maxTerrainHeightLocal; // La altura Y máxima local del terreno (m_heightScale)
-        DirectX::SimpleMath::Vector3 padding; // Para alinear a 16 bytes
+        DirectX::SimpleMath::Matrix LightViewProjection; // Matriz WVP desde la luz
+        float maxTerrainHeightLocal;
+        DirectX::SimpleMath::Vector3 padding;
     };
 
 
@@ -53,7 +59,11 @@ public:
     );
 
     bool GetWorldHeightAt(float worldX, float worldZ, float& outHeight) const;
-
+    void ShadowDraw(
+        ID3D11DeviceContext* context,
+        const DirectX::SimpleMath::Matrix& lightViewMatrix,
+        const DirectX::SimpleMath::Matrix& lightProjectionMatrix
+    );
 
 private:
     bool LoadHeightmap(ID3D11Device* device, ID3D11DeviceContext* context, const wchar_t* filename);
@@ -92,5 +102,5 @@ private:
     Microsoft::WRL::ComPtr<ID3D11VertexShader> m_terrainVS;
     Microsoft::WRL::ComPtr<ID3D11PixelShader>  m_terrainPS;
 
-
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_cbVS_ShadowPass;
 };

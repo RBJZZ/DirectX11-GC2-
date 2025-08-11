@@ -54,11 +54,14 @@ struct PSMaterialPropertiesData
 struct CB_VS_Evolving_Data {
     DirectX::SimpleMath::Matrix World;
     DirectX::SimpleMath::Matrix ViewProjection;
-    // Opcional: DirectX::SimpleMath::Matrix WorldInverseTranspose;
+    DirectX::SimpleMath::Matrix LightViewProjection;
+    DirectX::SimpleMath::Matrix WorldInverseTranspose;
 };
 
-
-
+struct CB_VS_Shadow_Data {
+    DirectX::SimpleMath::Matrix World;
+    DirectX::SimpleMath::Matrix LightViewProjection;
+};
 
 
 class Model
@@ -86,8 +89,13 @@ public:
     void EvolvingDraw(ID3D11DeviceContext* context,
         const DirectX::SimpleMath::Matrix& viewMatrix,
         const DirectX::SimpleMath::Matrix& projectionMatrix,
-        ID3D11Buffer* lightPropertiesCB,         // <--- NUEVO
-        ID3D11SamplerState* samplerState);
+        ID3D11Buffer* lightPropertiesCB,
+        ID3D11SamplerState* samplerState,
+        const DirectX::SimpleMath::Matrix& lightViewMatrix,
+        const DirectX::SimpleMath::Matrix& lightProjectionMatrix,
+        ID3D11ShaderResourceView* shadowMapSRV,
+        ID3D11SamplerState* shadowSampler
+    );
 
     // --- MÉTODOS PARA GESTIONAR TRANSFORMACIONES INDIVIDUALES ---
     void SetPosition(const DirectX::SimpleMath::Vector3& position);
@@ -126,6 +134,20 @@ public:
     const DirectX::BoundingSphere& GetOverallLocalBoundingSphere() const;
     DirectX::BoundingSphere GetOverallWorldBoundingSphere() const;
 
+    void ShadowDraw(
+        ID3D11DeviceContext* context,
+        const DirectX::SimpleMath::Matrix& worldMatrix,
+        const DirectX::SimpleMath::Matrix& lightViewMatrix,
+        const DirectX::SimpleMath::Matrix& lightProjectionMatrix
+    );
+
+    void ShadowDrawAlphaClip(
+        ID3D11DeviceContext* context,
+        const DirectX::SimpleMath::Matrix& worldMatrix,
+        const DirectX::SimpleMath::Matrix& lightViewMatrix,
+        const DirectX::SimpleMath::Matrix& lightProjectionMatrix,
+        ID3D11SamplerState* sampler
+    );
 private:
     // Estructura para representar una parte de la malla (sub-malla) de un modelo
     struct MeshPart
@@ -196,7 +218,7 @@ private:
     DirectX::BoundingSphere m_localBoundingSphere;
     DirectX::BoundingSphere m_overallLocalBoundingSphere;
 
-   
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_cbVS_Shadow;
 
     void UpdateWorldMatrix();
 

@@ -59,7 +59,7 @@ const Matrix& Model::GetWorldMatrix() const
     return m_worldMatrix;
 }
 
-// En Model.cpp
+
 bool Model::Load(ID3D11Device* device, ID3D11DeviceContext* context, const std::string& filename)
 {
     // HRESULT hr; // Puedes declarar hr localmente donde lo necesites, o mantenerlo si se usa más abajo.
@@ -151,6 +151,20 @@ bool Model::Load(ID3D11Device* device, ID3D11DeviceContext* context, const std::
     */
 
     // --- 4. CARGAR GEOMETRÍA Y MATERIALES DEL MODELO CON ASSIMP (ESTA SECCIÓN SE MANTIENE) ---
+
+    D3D11_BUFFER_DESC cbd_shadow = {};
+    cbd_shadow.Usage = D3D11_USAGE_DYNAMIC;
+    cbd_shadow.ByteWidth = sizeof(CB_VS_Shadow_Data); // Solo contendrá una matriz WVP
+    cbd_shadow.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbd_shadow.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    HRESULT hr = device->CreateBuffer(&cbd_shadow, nullptr, m_cbVS_Shadow.ReleaseAndGetAddressOf());
+    if (FAILED(hr))
+    {
+        OutputDebugString(L"ERROR::MODEL::Failed to create Shadow VS Constant Buffer.\n");
+        return false; 
+    }
+
     Assimp::Importer importer;
     unsigned int postProcessSteps =
         aiProcess_Triangulate |
@@ -564,8 +578,12 @@ void Model::Draw(ID3D11DeviceContext* context,
 void Model::EvolvingDraw(ID3D11DeviceContext* context,
     const Matrix& viewMatrix,
     const Matrix& projectionMatrix,
-    ID3D11Buffer* lightPropertiesCB,         // <--- NUEVO
-    ID3D11SamplerState* samplerState)
+    ID3D11Buffer* lightPropertiesCB,
+    ID3D11SamplerState* samplerState,
+    const Matrix& lightViewMatrix,
+    const Matrix& lightProjectionMatrix,
+    ID3D11ShaderResourceView* shadowMapSRV,
+    ID3D11SamplerState* shadowSampler)
 {
     if (!m_evolvingVertexShader || !m_evolvingPixelShader || !m_evolvingInputLayout || m_meshParts.empty() ||
         !m_cbVS_Evolving_WVP || !m_cbPS_MaterialProperties)
@@ -579,17 +597,17 @@ void Model::EvolvingDraw(ID3D11DeviceContext* context,
     context->VSSetShader(m_evolvingVertexShader.Get(), nullptr, 0);
     context->PSSetShader(m_evolvingPixelShader.Get(), nullptr, 0);
 
-    if (samplerState)
-    {
-        context->PSSetSamplers(0, 1, &samplerState);
-    }
+    if (samplerState) context->PSSetSamplers(0, 1, &samplerState);
+    if (lightPropertiesCB) context->PSSetConstantBuffers(1, 1, &lightPropertiesCB); 
 
-    if (lightPropertiesCB)
+    if (shadowMapSRV && shadowSampler)
     {
-        context->PSSetConstantBuffers(1, 1, &lightPropertiesCB); // slot b1 (como en EvolvingPS.hlsl)
+        context->PSSetShaderResources(1, 1, &shadowMapSRV); 
+        context->PSSetSamplers(1, 1, &shadowSampler);    
     }
 
     Matrix vpMatrix = viewMatrix * projectionMatrix;
+    Matrix lightVPMatrix = lightViewMatrix * lightProjectionMatrix;
 
     for (auto& meshPart : m_meshParts)
     {
@@ -603,13 +621,12 @@ void Model::EvolvingDraw(ID3D11DeviceContext* context,
         if (FAILED(hr)) { /* Log y continue */ }
 
         vsDataPtr = (CB_VS_Evolving_Data*)mappedResourceVS.pData;
-        Matrix currentMeshWorld = meshPart.localNodeTransform * m_worldMatrix;
-        vsDataPtr->World = currentMeshWorld; // Pasa World tal cual
-        vsDataPtr->ViewProjection = vpMatrix;  // Pasa ViewProjection tal cual
-        // Si tu VS va a transponer, asegúrate de que C++ y HLSL estén coordinados.
-        // Por defecto, SimpleMath es row-major. HLSL mul() espera column-major por defecto para el primer operando matricial.
-        // El HLSL que te di usa transpose(World) y transpose(ViewProjection), así que pasar las matrices
-        // tal cual desde C++ está bien.
+        Matrix world = meshPart.localNodeTransform * m_worldMatrix;
+        vsDataPtr->World = meshPart.localNodeTransform * m_worldMatrix;
+        vsDataPtr->ViewProjection = vpMatrix;
+        vsDataPtr->LightViewProjection = lightVPMatrix;
+
+        vsDataPtr->WorldInverseTranspose = world.Invert().Transpose();
 
         context->Unmap(m_cbVS_Evolving_WVP.Get(), 0);
         context->VSSetConstantBuffers(0, 1, m_cbVS_Evolving_WVP.GetAddressOf()); // slot b0
@@ -1047,3 +1064,79 @@ void Model::CalculateOverallBoundingSphere() {
     }
 }
 
+void Model::ShadowDraw(
+    ID3D11DeviceContext* context,
+    const DirectX::SimpleMath::Matrix& worldMatrix,
+    const DirectX::SimpleMath::Matrix& lightViewMatrix,
+    const DirectX::SimpleMath::Matrix& lightProjectionMatrix)
+{
+    // No dibujar si no tenemos el buffer o no hay mallas
+    if (!m_cbVS_Shadow || m_meshParts.empty())
+    {
+        return;
+    }
+
+    OutputDebugStringA("Drawing model shadow...\n");
+
+    // Combinamos las matrices para obtener la World-View-Projection desde la luz
+    Matrix lightWorldViewProj = worldMatrix * lightViewMatrix * lightProjectionMatrix;
+
+    // --- Actualizar el Constant Buffer del Vertex Shader ---
+    D3D11_MAPPED_SUBRESOURCE mappedResource;
+    HRESULT hr = context->Map(m_cbVS_Shadow.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+    if (FAILED(hr)) return;
+
+    CB_VS_Shadow_Data* dataPtr = (CB_VS_Shadow_Data*)mappedResource.pData;
+    dataPtr->World = worldMatrix; // Pasamos la matriz World de la instancia
+    dataPtr->LightViewProjection = lightViewMatrix * lightProjectionMatrix; // Pasamos la VP de la luz
+
+    context->Unmap(m_cbVS_Shadow.Get(), 0);
+
+    // Vinculamos el buffer al slot b0 del Vertex Shader (como espera nuestro ShadowVS.hlsl)
+    context->VSSetConstantBuffers(0, 1, m_cbVS_Shadow.GetAddressOf());
+
+    // --- Dibujar cada parte de la malla ---
+    // No necesitamos configurar materiales, texturas, etc. Solo la geometría.
+    for (auto& meshPart : m_meshParts)
+    {
+        meshPart.DrawPrim(context); // Dibuja la geometría usando los VBs/IBs
+    }
+}
+
+void Model::ShadowDrawAlphaClip(
+    ID3D11DeviceContext* context,
+    const DirectX::SimpleMath::Matrix& worldMatrix,
+    const DirectX::SimpleMath::Matrix& lightViewMatrix,
+    const DirectX::SimpleMath::Matrix& lightProjectionMatrix,
+    ID3D11SamplerState* sampler)
+{
+    if (!m_cbVS_Shadow || m_meshParts.empty()) return;
+
+    Matrix lightWVP = worldMatrix * lightViewMatrix * lightProjectionMatrix;
+
+    D3D11_MAPPED_SUBRESOURCE mappedResource;
+    context->Map(m_cbVS_Shadow.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+    CB_VS_Shadow_Data* dataPtr = (CB_VS_Shadow_Data*)mappedResource.pData;
+    dataPtr->World = worldMatrix; // El nuevo VS necesita la World matrix por separado
+    dataPtr->LightViewProjection = lightViewMatrix * lightProjectionMatrix;
+    context->Unmap(m_cbVS_Shadow.Get(), 0);
+
+    context->VSSetConstantBuffers(0, 1, m_cbVS_Shadow.GetAddressOf());
+
+    // Vinculamos el sampler que usarn todas las partes
+    context->PSSetSamplers(0, 1, &sampler);
+
+    for (auto& meshPart : m_meshParts)
+    {
+        if (meshPart.materialIndex < m_materials.size())
+        {
+            const auto& material = m_materials[meshPart.materialIndex];
+            if (material.diffuseTextureSRV)
+            {
+                // Vinculamos la textura difusa de este material al slot t0
+                context->PSSetShaderResources(0, 1, material.diffuseTextureSRV.GetAddressOf());
+            }
+        }
+        meshPart.DrawPrim(context);
+    }
+}

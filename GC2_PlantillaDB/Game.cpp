@@ -5,6 +5,8 @@
 #include "pch.h"
 #include "Game.h"
 #include <VertexTypes.h>
+#include <d3dcompiler.h>
+using namespace DirectX::SimpleMath;
 
 extern void ExitGame() noexcept;
 
@@ -298,10 +300,10 @@ void Game::Update(DX::StepTimer const& timer)
     {
         m_lightData.cameraPositionWorld = m_camera->GetPosition();
         // Ajusta estos valores de luz a tu gusto
-        m_lightData.directionalLightVector = DirectX::SimpleMath::Vector3(0.5f, -0.10f, 0.5f);
+        m_lightData.directionalLightVector = DirectX::SimpleMath::Vector3(0.8f, -0.15f, 0.2f);
         m_lightData.directionalLightVector.Normalize(); // Asegurarse de que esté normalizado
-        m_lightData.directionalLightColor = DirectX::SimpleMath::Vector4(1.0f, 1.0f, 0.95f, 1.0f);
-        m_lightData.ambientLightColor = DirectX::SimpleMath::Vector4(0.4f, 0.4f, 0.4f, 1.0f); // Ambiente gris más brillante
+        m_lightData.directionalLightColor = DirectX::SimpleMath::Vector4(1.0f, 0.7f, 0.4f, 1.0f);
+        m_lightData.ambientLightColor = DirectX::SimpleMath::Vector4(0.15f, 0.15f, 0.2f, 1.0f); // Ambiente gris más brillante
 
         // Actualizar el constant buffer de luces
         D3D11_MAPPED_SUBRESOURCE mappedResource;
@@ -344,6 +346,10 @@ void Game::Render()
         return;
     }
 
+    m_deviceResources->PIXBeginEvent(L"Render Shadow Map");
+    RenderShadowPass();
+    m_deviceResources->PIXEndEvent();
+
     Clear();
 
     m_deviceResources->PIXBeginEvent(L"Render");
@@ -366,30 +372,33 @@ void Game::Render()
     projectionMatrix = m_camera->GetProjectionMatrix();
 
     // TODO: Add your rendering code here.
-   
+
     context;
-    
+
 
     m_deviceResources->PIXBeginEvent(L"RenderOpaque");
-    if (m_states) 
+    if (m_states)
     {
         context->OMSetBlendState(m_states->Opaque(), nullptr, 0xFFFFFFFF);
         context->OMSetDepthStencilState(m_states->DepthDefault(), 0);
-        context->RSSetState(m_states->CullCounterClockwise()); 
+        context->RSSetState(m_states->CullCounterClockwise());
     }
 
-    if (m_terrain && m_states) 
+    if (m_terrain && m_states)
     {
         m_terrain->SetViewMatrix(viewMatrix);
         m_terrain->SetProjectionMatrix(projectionMatrix);
-        auto sampler = m_states->LinearWrap(); 
-        context->PSSetSamplers(0, 1, &sampler); 
+        auto sampler = m_states->LinearWrap();
+        context->PSSetSamplers(0, 1, &sampler);
         m_terrain->Render(
             context,
-            m_lightPropertiesCB.Get(),      
-            m_samplerState.Get(),           
-            m_camera->GetPosition()         
-        );;
+            m_lightPropertiesCB.Get(),
+            m_samplerState.Get(),
+            m_camera->GetPosition(),
+            m_lightViewMatrix * m_lightProjectionMatrix,
+            m_shadowMapSRV.Get(),
+            m_shadowSamplerState.Get()
+        );
     }
 
     for (const auto& instance : m_worldInstances)
@@ -411,7 +420,17 @@ void Game::Render()
             // Si todos usan el mismo (ej. CullNone o CullCounterClockwise), puedes ponerlo antes del bucle.
 
             // 3. Dibujar el modelo
-            instance.baseModel->EvolvingDraw(context, viewMatrix, projectionMatrix, m_lightPropertiesCB.Get(), m_samplerState.Get());
+            instance.baseModel->EvolvingDraw(
+                context,
+                viewMatrix,
+                projectionMatrix,
+                m_lightPropertiesCB.Get(),
+                m_samplerState.Get(),
+                m_lightViewMatrix,
+                m_lightProjectionMatrix,
+                m_shadowMapSRV.Get(),
+                m_shadowSamplerState.Get()
+            );
 
             // 4. Recolectar BoundingSphere para debug (ahora usa la worldTransform de la instancia)
             if (m_drawDebugCollisions) {
@@ -422,9 +441,8 @@ void Game::Render()
 
     if (m_states) context->RSSetState(m_states->CullCounterClockwise());
 
-    m_deviceResources->PIXEndEvent(); 
+    m_deviceResources->PIXEndEvent();
 
-   
     if (m_drawDebugCollisions)
     {
         m_deviceResources->PIXBeginEvent(L"Render Debug Collisions");
@@ -478,7 +496,7 @@ void Game::Render()
         m_deviceResources->PIXEndEvent();
     }
 
-   
+
 
     m_deviceResources->PIXBeginEvent(L"Render SkyDome");
     // --- DIBUJAR EL SKYDOME (DESPUÉS DE LOS OPACOS) ---
@@ -492,16 +510,16 @@ void Game::Render()
         m_skyEffect->SetView(viewMatrix);
         m_skyEffect->SetProjection(projectionMatrix);
 
-        m_skyEffect->Apply(context); 
+        m_skyEffect->Apply(context);
 
-        context->IASetInputLayout(m_skyInputLayout.Get()); 
+        context->IASetInputLayout(m_skyInputLayout.Get());
 
         // Guardar el estado de profundidad y stencil actual para restaurarlo después
         ID3D11DepthStencilState* oldDepthState = nullptr;
         UINT stencilRef = 0;
         context->OMGetDepthStencilState(&oldDepthState, &stencilRef);
 
-        context->RSSetState(m_states->CullClockwise()); 
+        context->RSSetState(m_states->CullClockwise());
         // O m_states->CullNone() si tienes dudas sobre el winding.
         context->OMSetDepthStencilState(m_skyDepthState.Get(), 0); // Usa el estado personalizado (LESS_EQUAL, ZWrite=OFF)
 
@@ -530,9 +548,9 @@ void Game::Render()
         swprintf_s(buffer, L"Pos: (%.2f, %.2f, %.2f)\nYaw: %.1f deg\nPitch: %.1f deg",
             m_camera->GetPosition().x, m_camera->GetPosition().y, m_camera->GetPosition().z,
             DirectX::XMConvertToDegrees(m_camera->GetYaw()),
-            DirectX::XMConvertToDegrees(m_camera->GetPitch())); 
+            DirectX::XMConvertToDegrees(m_camera->GetPitch()));
 
-        DirectX::SimpleMath::Vector2 textPosition(10.0f, 10.0f); 
+        DirectX::SimpleMath::Vector2 textPosition(10.0f, 10.0f);
         DirectX::SimpleMath::Vector4 textColor(1.0f, 1.0f, 0.0f, 1.0f);
 
         m_font->DrawString(m_spriteBatch.get(), buffer, textPosition, textColor);
@@ -541,9 +559,25 @@ void Game::Render()
     }
     m_deviceResources->PIXEndEvent();
 
-    m_deviceResources->PIXEndEvent();
+    if (m_spriteBatch)
+    {
+        m_spriteBatch->Begin();
 
-    // Show the new frame.
+        RECT outputSize = m_deviceResources->GetOutputSize();
+        long width = outputSize.right - outputSize.left;
+
+        RECT shadowMapRect = { width - 266, 10, width - 10, 266 };
+        m_spriteBatch->Draw(m_shadowMapSRV.Get(), shadowMapRect);
+
+        m_spriteBatch->End();
+    }
+
+    m_deviceResources->PIXEndEvent();
+    
+    ID3D11ShaderResourceView* nullSRVs[] = { nullptr, nullptr, nullptr, nullptr };
+    context->PSSetShaderResources(0, 4, nullSRVs); 
+
+
     m_deviceResources->Present();
 }
 
@@ -638,7 +672,7 @@ void Game::CreateDeviceDependentResources()
 
     D3D11_BUFFER_DESC cbd_lights = {};
     cbd_lights.Usage = D3D11_USAGE_DYNAMIC;
-    cbd_lights.ByteWidth = sizeof(PSLightPropertiesData); // Usa la struct definida en Model.h
+    cbd_lights.ByteWidth = sizeof(PSLightPropertiesData); 
     cbd_lights.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     cbd_lights.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     hr = device->CreateBuffer(&cbd_lights, nullptr, m_lightPropertiesCB.ReleaseAndGetAddressOf());
@@ -1037,7 +1071,7 @@ void Game::CreateDeviceDependentResources()
 
     DirectX::SimpleMath::Matrix baseTransform;
 
-  if (m_forest_pine1 && m_terrain) {
+    if (m_forest_pine1 && m_terrain) {
         baseTransform = m_forest_pine1->GetWorldMatrix(); 
         const std::vector<std::tuple<float, float, float>> pine1_data = {
             {222.93f, -102.9f,  -7.0f}, {196.91f, -241.45f, -2.0f}, {81.28f,  -103.99f, -2.0f},
@@ -1108,6 +1142,151 @@ void Game::CreateDeviceDependentResources()
         AddInstancedObject(m_rock1.get(), baseTransform, -79.10f, -118.56f, 5.0f, offsetY_rock);
     }
 
+    D3D11_TEXTURE2D_DESC texDesc = {};
+    texDesc.Width = SHADOW_MAP_SIZE;
+    texDesc.Height = SHADOW_MAP_SIZE;
+    texDesc.MipLevels = 1;
+    texDesc.ArraySize = 1;
+    texDesc.Format = DXGI_FORMAT_R32_TYPELESS; 
+    texDesc.SampleDesc.Count = 1;
+    texDesc.Usage = D3D11_USAGE_DEFAULT;
+    texDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE; 
+
+    hr = device->CreateTexture2D(&texDesc, nullptr, m_shadowMapTexture.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear la textura del shadow map.");
+
+    D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+    dsvDesc.Format = DXGI_FORMAT_D32_FLOAT; 
+    dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+    dsvDesc.Flags = 0;
+
+    hr = device->CreateDepthStencilView(m_shadowMapTexture.Get(), &dsvDesc, m_shadowMapDSV.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el DSV del shadow map.");
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R32_FLOAT; 
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = 1;
+
+    hr = device->CreateShaderResourceView(m_shadowMapTexture.Get(), &srvDesc, m_shadowMapSRV.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el SRV del shadow map.");
+
+    D3D11_SAMPLER_DESC samplerDesc = {};
+    samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_POINT;
+    samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_BORDER;
+    samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_BORDER;
+    samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_BORDER;
+    samplerDesc.BorderColor[0] = 1.0f;
+    samplerDesc.BorderColor[1] = 1.0f;
+    samplerDesc.BorderColor[2] = 1.0f;
+    samplerDesc.BorderColor[3] = 1.0f;
+    samplerDesc.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;
+
+    hr = device->CreateSamplerState(&samplerDesc, m_shadowSamplerState.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el sampler de comparación para sombras.");
+
+    D3D11_RASTERIZER_DESC rasterDesc = {};
+    rasterDesc.CullMode = D3D11_CULL_BACK;
+    rasterDesc.FillMode = D3D11_FILL_SOLID;
+    rasterDesc.DepthClipEnable = true;
+
+    // --- NUEVA CONFIGURACIN DE BIAS ---
+    // Un bias fijo moderado para evitar fugas de luz a gran escala.
+    rasterDesc.DepthBias = 100; // Aumentamos de 0 a 100.
+
+    rasterDesc.DepthBiasClamp = 0.0f;
+
+    // Un bias de pendiente ms fuerte para combatir el acn en ngulos pronunciados.
+    rasterDesc.SlopeScaledDepthBias = 4.0f; // Aumentamos de 2.0 a 4.0
+    // --- FIN DE LA NUEVA CONFIGURACIN ---
+
+    hr = device->CreateRasterizerState(&rasterDesc, m_shadowRasterizerState.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el estado de rasterizador para sombras.");
+
+
+    Microsoft::WRL::ComPtr<ID3DBlob> vsBlob;
+    Microsoft::WRL::ComPtr<ID3DBlob> psBlob;
+
+
+    // ¡ASEGÚRATE DE QUE LA RUTA A TU SHADER SEA CORRECTA!
+    hr = D3DReadFileToBlob(L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\ShadowVS.cso", vsBlob.GetAddressOf());
+    if (FAILED(hr))
+    {
+        throw std::runtime_error("Fallo al cargar ShadowVS.cso. Revisa la ruta y asegúrate de que compila.");
+    }
+
+    hr = device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, m_shadowVertexShader.ReleaseAndGetAddressOf());
+    if (FAILED(hr))
+    {
+        throw std::runtime_error("Fallo al crear el vertex shader de sombras.");
+    }
+
+    hr = D3DReadFileToBlob(L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\ShadowPS.cso", psBlob.GetAddressOf()); // O la ruta completa si es necesario
+    if (FAILED(hr))
+    {
+        throw std::runtime_error("Fallo al cargar ShadowPS.cso.");
+    }
+
+    hr = device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, m_shadowPixelShader.ReleaseAndGetAddressOf());
+    if (FAILED(hr))
+    {
+        throw std::runtime_error("Fallo al crear el pixel shader de sombras.");
+    }
+
+    Microsoft::WRL::ComPtr<ID3DBlob> vsAlphaBlob;
+    hr = D3DReadFileToBlob(L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\ShadowVS_AlphaClip.cso", vsAlphaBlob.GetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al cargar ShadowVS_AlphaClip.cso.");
+    hr = device->CreateVertexShader(vsAlphaBlob->GetBufferPointer(), vsAlphaBlob->GetBufferSize(), nullptr, m_shadowVertexShader_AlphaClip.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el vertex shader de sombras con alfa.");
+
+    // CREAMOS EL NICO INPUT LAYOUT QUE NECESITAMOS USANDO EL BLOB CORRECTO
+    const D3D11_INPUT_ELEMENT_DESC shadowLayoutDesc[] =
+    {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,    0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 }
+    };
+
+    hr = device->CreateInputLayout(
+        shadowLayoutDesc,
+        ARRAYSIZE(shadowLayoutDesc),
+        vsAlphaBlob->GetBufferPointer(), // <-- Ahora usa el blob correcto
+        vsAlphaBlob->GetBufferSize(),
+        m_shadowInputLayout.ReleaseAndGetAddressOf()
+    );
+    if (FAILED(hr))
+    {
+        throw std::runtime_error("Fallo al crear el input layout de sombras unificado.");
+    }
+
+    Microsoft::WRL::ComPtr<ID3DBlob> psAlphaBlob;
+    hr = D3DReadFileToBlob(L"\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\ShadowPS_AlphaClip.cso", psAlphaBlob.GetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al cargar ShadowPS_AlphaClip.cso.");
+    hr = device->CreatePixelShader(psAlphaBlob->GetBufferPointer(), psAlphaBlob->GetBufferSize(), nullptr, m_shadowPixelShader_AlphaClip.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el pixel shader de sombras con alfa.");
+
+    // --- Crear el Input Layout para el Pase de Sombras ---
+    // Aunque el shader solo usa la posición, el layout debe describir la estructura completa del buffer
+    // de vértices (ModelVertex o TerrainVertex) para que la GPU sepa el tamaño de cada vértice.
+
+    D3D11_DEPTH_STENCIL_DESC dsDesc = {};
+    dsDesc.DepthEnable = TRUE;                         // Habilitar pruebas de profundidad
+    dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; // LA CLAVE: Permitir escribir en el buffer
+    dsDesc.DepthFunc = D3D11_COMPARISON_LESS;           // Pasa si el nuevo pxel est ms cerca
+
+    // No usamos el stencil, as que lo dejamos por defecto
+    dsDesc.StencilEnable = FALSE;
+    dsDesc.StencilReadMask = D3D11_DEFAULT_STENCIL_READ_MASK;
+    dsDesc.StencilWriteMask = D3D11_DEFAULT_STENCIL_WRITE_MASK;
+
+    hr = device->CreateDepthStencilState(&dsDesc, m_shadowDepthState.ReleaseAndGetAddressOf());
+    if (FAILED(hr))
+    {
+        throw std::runtime_error("Fallo al crear el estado de profundidad para sombras.");
+    }
+
+
+
     device;
 }
 
@@ -1170,3 +1349,66 @@ void Game::AddInstancedObject(
 }
 
 #pragma endregion
+
+#pragma region Shadow Mapping
+
+void Game::RenderShadowPass()
+{
+    auto context = m_deviceResources->GetD3DDeviceContext();
+    if (!m_shadowDepthState) return;
+
+    // 1. Configurar la pipeline una sola vez para TODOS los objetos
+    context->OMSetRenderTargets(0, nullptr, m_shadowMapDSV.Get());
+    context->OMSetDepthStencilState(m_shadowDepthState.Get(), 0);
+    context->ClearDepthStencilView(m_shadowMapDSV.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
+
+    D3D11_VIEWPORT shadowViewport = { 0.0f, 0.0f, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 0.0f, 1.0f };
+    context->RSSetViewports(1, &shadowViewport);
+
+    // Usamos el VS potente y el Input Layout correcto para todo
+    context->VSSetShader(m_shadowVertexShader_AlphaClip.Get(), nullptr, 0);
+    context->IASetInputLayout(m_shadowInputLayout.Get());
+
+    // 2. Calcular matrices de la luz
+    Vector3 shadowFocusPoint = m_camera->GetPosition();
+    Vector3 lightPosition = shadowFocusPoint + (m_lightData.directionalLightVector * 200.0f);
+    Vector3 lightUp = Vector3::Up;
+    m_lightViewMatrix = Matrix::CreateLookAt(lightPosition, shadowFocusPoint, lightUp);
+    m_lightProjectionMatrix = Matrix::CreateOrthographic(500.f, 500.f, 1.0f, 800.0f);
+
+    // 3. Dibujar los modelos
+    for (const auto& instance : m_worldInstances)
+    {
+        if (instance.baseModel)
+        {
+            context->RSSetState(m_shadowRasterizerState.Get()); // Usa el estado de culling normal
+
+            bool usesAlphaClip = (instance.baseModel == m_green_tree1.get() ||
+                instance.baseModel == m_forest_pine1.get() ||
+                instance.baseModel == m_forest_pine2.get() ||
+                instance.baseModel == m_forest_pine3.get());
+
+            if (usesAlphaClip)
+            {
+                context->PSSetShader(m_shadowPixelShader_AlphaClip.Get(), nullptr, 0);
+            }
+            else
+            {
+                context->PSSetShader(m_shadowPixelShader.Get(), nullptr, 0);
+            }
+
+            // Usamos siempre la funcin de dibujado ms completa
+            instance.baseModel->ShadowDrawAlphaClip(context, instance.worldTransform, m_lightViewMatrix, m_lightProjectionMatrix, m_samplerState.Get());
+        }
+    }
+
+    // 4. Dibujar el terreno (slido, no necesita alfa)
+    if (m_terrain)
+    {
+        context->PSSetShader(m_shadowPixelShader.Get(), nullptr, 0);
+        m_terrain->ShadowDraw(context, m_lightViewMatrix, m_lightProjectionMatrix);
+    }
+}
+
+#pragma endregion
+

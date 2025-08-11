@@ -312,6 +312,18 @@ bool Terrain::Initialize(ID3D11Device* device, ID3D11DeviceContext* contextForHe
     hr = device->CreateBuffer(&cbd_vs_terrain, nullptr, m_cbVSTerrainData.ReleaseAndGetAddressOf());
     if (FAILED(hr)) { OutputDebugString(L"ERROR: Failed to create Terrain VS CB.\n"); return false; }
 
+    D3D11_BUFFER_DESC cbd_shadow_pass = {};
+    cbd_shadow_pass.Usage = D3D11_USAGE_DYNAMIC;
+    cbd_shadow_pass.ByteWidth = sizeof(CB_VS_Shadow_Data); // ¡Usa la struct del Modelo!
+    cbd_shadow_pass.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbd_shadow_pass.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    hr = device->CreateBuffer(&cbd_shadow_pass, nullptr, m_cbVS_ShadowPass.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) {
+        OutputDebugString(L"ERROR: Failed to create Terrain Shadow Pass VS CB.\n");
+        return false;
+    }
+
+
     OutputDebugString(L"Terrain with custom shaders initialized successfully.\n");
     return true;
 }
@@ -323,7 +335,10 @@ void Terrain::SetProjectionMatrix(const Matrix& projection) { m_projectionMatrix
 void Terrain::Render(ID3D11DeviceContext* context,
     ID3D11Buffer* lightPropertiesCB,
     ID3D11SamplerState* samplerState,
-    const DirectX::SimpleMath::Vector3& cameraPositionWorld // Ya la tienes en LightPropertiesCB, pero la pasamos por si el CB de luces no la tuviera
+    const DirectX::SimpleMath::Vector3& cameraPositionWorld,
+    const DirectX::SimpleMath::Matrix& lightViewProjMatrix,
+    ID3D11ShaderResourceView* shadowMapSRV,
+    ID3D11SamplerState* shadowSampler
 )
 {
     if (!m_vertexBuffer || !m_indexBuffer || !m_terrainVS || !m_terrainPS || !m_inputLayout ||
@@ -340,25 +355,24 @@ void Terrain::Render(ID3D11DeviceContext* context,
 
     // Actualizar Constant Buffer del Vertex Shader
     D3D11_MAPPED_SUBRESOURCE mappedResourceVS;
-    CBTerrainVSData* vsDataPtr;
-    HRESULT hr = context->Map(m_cbVSTerrainData.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResourceVS);
-    if (FAILED(hr)) { /* Log y return */ }
-    vsDataPtr = (CBTerrainVSData*)mappedResourceVS.pData;
-    vsDataPtr->World = m_worldMatrix; // Asume que m_worldMatrix ya está como el shader la espera (o transponla aquí/shader)
-    vsDataPtr->ViewProjection = m_viewMatrix * m_projectionMatrix; // Asume que m_viewMatrix y m_projectionMatrix son correctas
-    vsDataPtr->maxTerrainHeightLocal = m_heightScale; // m_heightScale es la Y máxima local si el heightmap va de 0-1
+    context->Map(m_cbVSTerrainData.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResourceVS);
+    CBTerrainVSData* vsDataPtr = (CBTerrainVSData*)mappedResourceVS.pData;
+    vsDataPtr->World = m_worldMatrix;
+    vsDataPtr->ViewProjection = m_viewMatrix * m_projectionMatrix;
+    vsDataPtr->LightViewProjection = lightViewProjMatrix; // Pasa la matriz de luz
+    vsDataPtr->maxTerrainHeightLocal = m_heightScale;
     context->Unmap(m_cbVSTerrainData.Get(), 0);
-    context->VSSetConstantBuffers(0, 1, m_cbVSTerrainData.GetAddressOf()); // slot b0
+    context->VSSetConstantBuffers(0, 1, m_cbVSTerrainData.GetAddressOf());
 
     // Vincular Constant Buffer de Luces (al Pixel Shader)
     context->PSSetConstantBuffers(1, 1, &lightPropertiesCB); // slot b1
 
     // Vincular Texturas al Pixel Shader
     ID3D11ShaderResourceView* terrainTextures[] = { m_textureSRV1.Get(), m_textureSRV2.Get(), m_textureSRV3.Get() };
-    context->PSSetShaderResources(0, 3, terrainTextures); // slots t0, t1, t2
+    context->PSSetShaderResources(0, 3, terrainTextures);
 
-    // Vincular Sampler State al Pixel Shader
-    context->PSSetSamplers(0, 1, &samplerState); // slot s0
+    context->PSSetShaderResources(3, 1, &shadowMapSRV);
+    context->PSSetSamplers(1, 1, &shadowSampler);
 
     // Configurar Buffers y Dibujar (como antes)
     UINT stride = sizeof(TerrainVertex);
@@ -475,4 +489,43 @@ bool Terrain::GetWorldHeightAt(float worldX, float worldZ, float& outHeight) con
         m_worldMatrix._42;
 
     return true;
+}
+
+void Terrain::ShadowDraw(
+    ID3D11DeviceContext* context,
+    const DirectX::SimpleMath::Matrix& lightViewMatrix,
+    const DirectX::SimpleMath::Matrix& lightProjectionMatrix)
+{
+    // Asegurarse de que los recursos necesarios para el dibujado de sombras existan.
+    // Para el terreno, solo necesitamos su vertex buffer, index buffer y el cbuffer del VS.
+    if (!m_vertexBuffer || !m_indexBuffer || !m_cbVS_ShadowPass)
+    {
+        return;
+    }
+
+    // 1. Actualizar el Constant Buffer del Vertex Shader con las matrices de la luz.
+    D3D11_MAPPED_SUBRESOURCE mappedResourceVS;
+    HRESULT hr = context->Map(m_cbVS_ShadowPass.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResourceVS);
+    if (FAILED(hr))
+    {
+        OutputDebugString(L"Terrain::ShadowDraw - Failed to map shadow pass VS constant buffer.\n");
+        return;
+    }
+
+    CB_VS_Shadow_Data* vsDataPtr = (CB_VS_Shadow_Data*)mappedResourceVS.pData;
+    vsDataPtr->World = m_worldMatrix;
+    vsDataPtr->LightViewProjection = lightViewMatrix * lightProjectionMatrix;
+    context->Unmap(m_cbVS_ShadowPass.Get(), 0);
+
+    // 2. Vincular el buffer correcto al slot b0 del Vertex Shader
+    context->VSSetConstantBuffers(0, 1, m_cbVS_ShadowPass.GetAddressOf());
+
+    // 3. Establecer buffers y dibujar (esto no cambia)
+    UINT stride = sizeof(TerrainVertex);
+    UINT offset = 0;
+    context->IASetVertexBuffers(0, 1, m_vertexBuffer.GetAddressOf(), &stride, &offset);
+    context->IASetIndexBuffer(m_indexBuffer.Get(), DXGI_FORMAT_R32_UINT, 0);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    context->DrawIndexed(m_indexCount, 0, 0);
 }

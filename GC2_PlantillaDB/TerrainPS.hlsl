@@ -2,6 +2,8 @@ Texture2D baseTexture : register(t0); // Ej. Pasto
 Texture2D lowAltitudeTexture : register(t1); // Ej. Tierra
 Texture2D highAltitudeTexture : register(t2); // Ej. Roca
 SamplerState textureSampler : register(s0);
+Texture2D shadowMap : register(t3);
+SamplerComparisonState shadowSampler : register(s1);
 
 // CB de Luces (igual que el de tus modelos)
 cbuffer LightProperties : register(b1)
@@ -26,7 +28,26 @@ struct PixelInputType
     float3 worldPosition : WORLDPOS;
     float scaledLocalY : TEXCOORD1; // Y local escalada
     float maxHeight : TEXCOORD2; // MaxTerrainHeightLocal
+    float4 positionInLightSpace : TEXCOORD3;
 };
+
+float ApplyShadowFalloff(float currentShadowFactor, float2 shadowUV)
+{
+    // Distancia desde el centro del shadow map (0.5, 0.5)
+    float2 fromCenter = abs(shadowUV - 0.5f) * 2.0f; // Distancia en cada eje, normalizada a 0-1
+    float dist = max(fromCenter.x, fromCenter.y); // Usamos la distancia mxima (Chebyshev) para un borde cuadrado
+
+    // Define dnde empieza y termina el degradado (ej. del 85% al 95% del borde)
+    float falloffStart = 0.85f;
+    float falloffEnd = 0.95f;
+
+    // Calcula un factor de suavizado
+    float smoothFactor = smoothstep(falloffEnd, falloffStart, dist);
+
+    // Mezcla entre 1.0 (sin sombra) y el factor de sombra calculado.
+    // En los bordes, el resultado ser 1.0.
+    return lerp(1.0f, currentShadowFactor, smoothFactor);
+}
 
 float4 main(PixelInputType input) : SV_TARGET
 {
@@ -87,8 +108,32 @@ float4 main(PixelInputType input) : SV_TARGET
         specular = pow(NdotH, terrainSpecularPower) * directionalLightColor * terrainSpecularColor;
     }
 
-    float4 finalColor = ambient + diffuse + specular;
-    finalColor.a = blendedAlbedo.a; // O 1.0f si el terreno siempre es opaco
+    float4 finalColor = ambient;
+    
+    // 2. Calculamos las coordenadas para el shadow map
+    input.positionInLightSpace.xyz /= input.positionInLightSpace.w;
+    float2 shadowTexCoord = float2(input.positionInLightSpace.x * 0.5f + 0.5f, -input.positionInLightSpace.y * 0.5f + 0.5f);
+
+    // 3. Calculamos la visibilidad de la luz (el desvanecimiento en los bordes)
+    float2 fromCenter = abs(shadowTexCoord - 0.5f) * 2.0f;
+    float dist = max(fromCenter.x, fromCenter.y);
+    float falloffStart = 0.85f;
+    float falloffEnd = 0.98f;
+    float lightVisibility = 1.0 - smoothstep(falloffStart, falloffEnd, dist);
+
+    // 4. Calculamos el factor de sombra (si el pxel est tapado o no)
+    float bias = 0.0005f;
+    float shadowFactor = shadowMap.SampleCmpLevelZero(shadowSampler, shadowTexCoord, input.positionInLightSpace.z - bias);
+    
+    // 5. COMBINACIN FINAL:
+    // El factor de luz final es el producto de la visibilidad Y si est en sombra.
+    float finalLightFactor = lightVisibility * shadowFactor;
+    
+    // 6. Aadimos la luz direccional y especular, modulada por nuestro factor final.
+    finalColor += (diffuse + specular) * finalLightFactor;
+    
+    finalColor.a = blendedAlbedo.a;
 
     return finalColor;
+    //return float4(lightVisibility, lightVisibility, lightVisibility, 1.0f);
 }

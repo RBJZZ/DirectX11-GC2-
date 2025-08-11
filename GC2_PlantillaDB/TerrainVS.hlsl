@@ -2,6 +2,7 @@ cbuffer CBTerrainVSData : register(b0)
 {
     matrix World;
     matrix ViewProjection;
+    matrix LightViewProjection;
     float MaxTerrainHeightLocal; // m_heightScale, ya que la altura del vértice es 0-1 * m_heightScale
     // float3 padding; // No es necesario acceder al padding en el shader
 };
@@ -21,6 +22,7 @@ struct PixelInputType
     float3 worldPosition : WORLDPOS; // Posición en espacio del mundo para iluminación
     float scaledLocalY : TEXCOORD1; // Y local escalada (altura real local)
     float maxHeight : TEXCOORD2; // MaxTerrainHeightLocal para el cálculo de mezcla
+    float4 positionInLightSpace : TEXCOORD3;
 };
 
 PixelInputType main(VertexInputType input)
@@ -36,6 +38,7 @@ PixelInputType main(VertexInputType input)
 
     output.scaledLocalY = input.localPosition.y; // Esta es la altura ya escalada por m_heightScale
     output.maxHeight = MaxTerrainHeightLocal; // m_heightScale (ya que los datos del heightmap van de 0-1)
+    output.positionInLightSpace = mul(worldPos, transpose(LightViewProjection));
 
     return output;
 }

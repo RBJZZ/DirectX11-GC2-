@@ -83,6 +83,7 @@ private:
         float modelSpecificOffsetY
     );
 
+    void RenderShadowPass();
     // Device resources.
     std::unique_ptr<DX::DeviceResources> m_deviceResources;
 
@@ -158,5 +159,27 @@ private:
 
     // Model instances
     std::vector<GameObjectInstance> m_worldInstances;
+
+    // Shadow mapping
+    Microsoft::WRL::ComPtr<ID3D11Texture2D>           m_shadowMapTexture;
+    Microsoft::WRL::ComPtr<ID3D11DepthStencilView>  m_shadowMapDSV;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_shadowMapSRV;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState>      m_shadowSamplerState; 
+    Microsoft::WRL::ComPtr<ID3D11RasterizerState>   m_shadowRasterizerState; 
+    Microsoft::WRL::ComPtr<ID3D11DepthStencilState> m_shadowDepthState;
+
+    DirectX::SimpleMath::Matrix m_lightViewMatrix;
+    DirectX::SimpleMath::Matrix m_lightProjectionMatrix;
+
+    Microsoft::WRL::ComPtr<ID3D11VertexShader> m_shadowVertexShader;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader>  m_shadowPixelShader;
+    Microsoft::WRL::ComPtr<ID3D11InputLayout>  m_shadowInputLayout;
+    Microsoft::WRL::ComPtr<ID3D11RasterizerState>   m_shadowRasterizerState_CullFront;
+
+    Microsoft::WRL::ComPtr<ID3D11VertexShader> m_shadowVertexShader_AlphaClip; 
+    Microsoft::WRL::ComPtr<ID3D11PixelShader>  m_shadowPixelShader_AlphaClip;
+
+    static const int SHADOW_MAP_SIZE = 4096;
+
 
 };
