@@ -23,6 +23,7 @@ cbuffer MaterialProperties : register(b2) // Asegúrate que este slot (b2) se use
     float4 materialSpecularColor; // Color del brillo especular del material
     float specularPower; // Exponente para el brillo especular (qué tan concentrado es)
     float3 _paddingForMaterial; // Padding para alinear
+    float4 materialEmissiveColor;
 };
 
 struct PixelInputType_Evolving // Entrada desde el Vertex Shader
@@ -52,10 +53,40 @@ float ApplyShadowFalloff(float currentShadowFactor, float2 shadowUV)
     return lerp(1.0f, currentShadowFactor, smoothFactor);
 }
 
+float CalculatePCFShadowFactor(Texture2D shadowTex, SamplerComparisonState shadowSamp, float4 lightSpacePos, float bias)
+{
+    // 1. Proyeccin perspectiva y coordenadas de textura
+    lightSpacePos.xyz /= lightSpacePos.w;
+    float2 shadowTexCoord = float2(lightSpacePos.x * 0.5f + 0.5f, -lightSpacePos.y * 0.5f + 0.5f);
+
+    float shadowFactor = 0.0f;
+    float2 texelSize;
+    uint width, height;
+    shadowTex.GetDimensions(width, height);
+    texelSize = float2(1.0f / width, 1.0f / height);
+
+    // 2. Bucle del kernel 5x5
+    for (int y = -2; y <= 2; y++)
+    {
+        for (int x = -2; x <= 2; x++)
+        {
+            // Muestrear y comparar la profundidad
+            shadowFactor += shadowTex.SampleCmpLevelZero(
+                shadowSamp,
+                shadowTexCoord + float2(x, y) * texelSize, // Coordenada de la muestra actual
+                lightSpacePos.z - bias // Profundidad del pxel actual con bias
+            );
+        }
+    }
+
+    // 3. Promediar los resultados
+    return shadowFactor / 25.0f; // Dividir por el nmero total de muestras (5*5=25)
+}
+
 float4 main(PixelInputType_Evolving input) : SV_TARGET
 {
     // Obtener el color base de la textura
-    float4 albedo = diffuseTexture.Sample(textureSampler, input.texCoord);
+    float4 albedo = diffuseTexture.Sample(textureSampler, input.texCoord); 
 
     // Alpha clipping para las hojas de los rboles
     float alphaClipThreshold = 0.5f;
@@ -81,9 +112,9 @@ float4 main(PixelInputType_Evolving input) : SV_TARGET
     // 1. Empezamos con el color base siendo solo la luz ambiental.
     float4 finalColor = ambient;
     
-    // 2. Calculamos las coordenadas para el shadow map
-    input.positionInLightSpace.xyz /= input.positionInLightSpace.w;
-    float2 shadowTexCoord = float2(input.positionInLightSpace.x * 0.5f + 0.5f, -input.positionInLightSpace.y * 0.5f + 0.5f);
+    float4 lightSpacePos = input.positionInLightSpace; // Copiamos para claridad
+    lightSpacePos.xyz /= lightSpacePos.w;
+    float2 shadowTexCoord = float2(lightSpacePos.x * 0.5f + 0.5f, -lightSpacePos.y * 0.5f + 0.5f);
 
     // 3. Calculamos la visibilidad de la luz (el desvanecimiento en los bordes)
     float2 fromCenter = abs(shadowTexCoord - 0.5f) * 2.0f;
@@ -94,16 +125,17 @@ float4 main(PixelInputType_Evolving input) : SV_TARGET
 
     // 4. Calculamos el factor de sombra (si el pxel est tapado o no)
     float bias = 0.0005f;
-    float shadowFactor = shadowMap.SampleCmpLevelZero(shadowSampler, shadowTexCoord, input.positionInLightSpace.z - bias);
+    float shadowFactor = CalculatePCFShadowFactor(shadowMap, shadowSampler, input.positionInLightSpace, bias);
     
     // 5. COMBINACIN FINAL:
     // El factor de luz final es el producto de la visibilidad Y si est en sombra.
     float finalLightFactor = lightVisibility * shadowFactor;
     
     // 6. Aadimos la luz direccional y especular, modulada por nuestro factor final.
-    finalColor += (diffuse + specular) * finalLightFactor;
+    finalColor = materialEmissiveColor + ambient + (diffuse + specular) * finalLightFactor;
     
     finalColor.a = albedo.a;
 
     return finalColor;
 }
+

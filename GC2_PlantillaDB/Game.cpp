@@ -24,7 +24,10 @@ Game::Game() noexcept(false) :
     m_wTapCount(0),
     m_wTapTimer(0.0f),
     m_wKeyWasPressedInPreviousFrame(false),
-    m_drawDebugCollisions(true)
+    m_drawDebugCollisions(true),
+    m_timeOfDay(0.25f),
+    m_dayNightCycleSpeed(0.02f),
+    m_sunPower(0.0f)
 {
 
     m_deviceResources = std::make_unique<DX::DeviceResources>();
@@ -33,6 +36,11 @@ Game::Game() noexcept(false) :
     //   Add DX::DeviceResources::c_EnableHDR for HDR10 display.
     m_deviceResources->RegisterDeviceNotify(this);
     m_currentSpeed = m_normalSpeed;
+
+    m_fireflyVolume = DirectX::BoundingBox(
+        DirectX::SimpleMath::Vector3(50.f, -5.f, -150.f),
+        DirectX::SimpleMath::Vector3(150.f, 20.f, 200.f)
+    );
 }
 
 // Initialize the Direct3D resources required to run.
@@ -78,6 +86,9 @@ void Game::Update(DX::StepTimer const& timer)
     auto context = m_deviceResources->GetD3DDeviceContext();
 
     // TODO: Add your game logic here.
+
+    UpdateDayNightCycle(elapsedTime);
+    UpdateFireflies(elapsedTime);
 
     if (m_keyboard)
     {
@@ -296,15 +307,34 @@ void Game::Update(DX::StepTimer const& timer)
         }
     }
 
-    if (m_camera && m_lightPropertiesCB) // Solo si la cámara y el CB existen
+    //if (m_camera && m_lightPropertiesCB) // Solo si la cámara y el CB existen
+    //{
+    //    m_lightData.cameraPositionWorld = m_camera->GetPosition();
+    //    // Ajusta estos valores de luz a tu gusto
+    //    m_lightData.directionalLightVector = DirectX::SimpleMath::Vector3(-0.5f, -0.8f, -0.2f);
+    //    m_lightData.directionalLightVector.Normalize(); // Asegurarse de que esté normalizado
+    //    float sunIntensity = 2.0f;
+    //    m_lightData.directionalLightColor = DirectX::SimpleMath::Vector4(1.0f, 1.0f, 0.98f, 1.0f) * sunIntensity;
+    //    float ambientIntensity = 0.1f;
+    //    m_lightData.ambientLightColor = DirectX::SimpleMath::Vector4(0.25f, 0.61f, 1.0f, 1.0f) * ambientIntensity;
+    //    // Actualizar el constant buffer de luces
+    //    D3D11_MAPPED_SUBRESOURCE mappedResource;
+    //    HRESULT hr = context->Map(m_lightPropertiesCB.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+    //    if (SUCCEEDED(hr))
+    //    {
+    //        memcpy(mappedResource.pData, &m_lightData, sizeof(PSLightPropertiesData));
+    //        context->Unmap(m_lightPropertiesCB.Get(), 0);
+    //    }
+    //    else
+    //    {
+    //        // Manejar error de mapeo si ocurre
+    //        OutputDebugString(L"Failed to map light properties constant buffer.\n");
+    //    }
+    //}
+
+    if (m_camera && m_lightPropertiesCB)
     {
         m_lightData.cameraPositionWorld = m_camera->GetPosition();
-        // Ajusta estos valores de luz a tu gusto
-        m_lightData.directionalLightVector = DirectX::SimpleMath::Vector3(0.8f, -0.15f, 0.2f);
-        m_lightData.directionalLightVector.Normalize(); // Asegurarse de que esté normalizado
-        m_lightData.directionalLightColor = DirectX::SimpleMath::Vector4(1.0f, 0.7f, 0.4f, 1.0f);
-        m_lightData.ambientLightColor = DirectX::SimpleMath::Vector4(0.15f, 0.15f, 0.2f, 1.0f); // Ambiente gris más brillante
-
         // Actualizar el constant buffer de luces
         D3D11_MAPPED_SUBRESOURCE mappedResource;
         HRESULT hr = context->Map(m_lightPropertiesCB.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
@@ -315,7 +345,6 @@ void Game::Update(DX::StepTimer const& timer)
         }
         else
         {
-            // Manejar error de mapeo si ocurre
             OutputDebugString(L"Failed to map light properties constant buffer.\n");
         }
     }
@@ -340,47 +369,37 @@ void Game::Update(DX::StepTimer const& timer)
 // Draws the scene.
 void Game::Render()
 {
-    // Don't try to render anything before the first Update.
+    // No intentar renderizar antes de la primera actualización.
     if (m_timer.GetFrameCount() == 0)
     {
         return;
     }
 
-    m_deviceResources->PIXBeginEvent(L"Render Shadow Map");
-    RenderShadowPass();
-    m_deviceResources->PIXEndEvent();
-
-    m_deviceResources->PIXBeginEvent(L"Render Minimap");
-    RenderMinimapPass();
-    m_deviceResources->PIXEndEvent();
-
-    Clear();
-
-    m_deviceResources->PIXBeginEvent(L"Render");
     auto context = m_deviceResources->GetD3DDeviceContext();
+    auto finalRTV = m_deviceResources->GetRenderTargetView();
+    auto depthStencil = m_deviceResources->GetDepthStencilView();
+    const auto mainViewport = m_deviceResources->GetScreenViewport();
 
-    DirectX::SimpleMath::Matrix viewMatrix = DirectX::SimpleMath::Matrix::Identity;
-    DirectX::SimpleMath::Matrix projectionMatrix = DirectX::SimpleMath::Matrix::Identity;
+    // --- Pases de pre-renderizado (sombras, minimapa) ---
+    RenderShadowPass();
+    RenderMinimapPass();
 
-    if (m_drawDebugCollisions) {
-        m_modelSpheresToDraw.clear();
-    }
+    // ====================================================================
+    // PASO 1: RENDERIZAR TODA LA ESCENA 3D A UNA TEXTURA FUERA DE PANTALLA
+    // ====================================================================
+    m_deviceResources->PIXBeginEvent(L"1. Render 3D Scene to Texture");
 
-    if (!m_camera)
-    {
-        OutputDebugString(L"ERROR: m_camera es nullptr en Game::Render()!\n");
-        // Probablemente quieras retornar o manejar esto para evitar un crash
-        return;
-    }
-    viewMatrix = m_camera->GetViewMatrix();
-    projectionMatrix = m_camera->GetProjectionMatrix();
+    // Establecer nuestro RTV de escena como el objetivo de renderizado
+    context->OMSetRenderTargets(1, m_sceneRTV.GetAddressOf(), depthStencil);
+    context->ClearRenderTargetView(m_sceneRTV.Get(), DirectX::Colors::CornflowerBlue);
+    context->ClearDepthStencilView(depthStencil, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+    context->RSSetViewports(1, &mainViewport);
 
-    // TODO: Add your rendering code here.
+    // --- Renderizado principal de la escena ---
+    DirectX::SimpleMath::Matrix viewMatrix = m_camera->GetViewMatrix();
+    DirectX::SimpleMath::Matrix projectionMatrix = m_camera->GetProjectionMatrix();
 
-    context;
-
-
-    m_deviceResources->PIXBeginEvent(L"RenderOpaque");
+    // Configurar estados comunes para los objetos opacos
     if (m_states)
     {
         context->OMSetBlendState(m_states->Opaque(), nullptr, 0xFFFFFFFF);
@@ -388,42 +407,29 @@ void Game::Render()
         context->RSSetState(m_states->CullCounterClockwise());
     }
 
-    if (m_terrain && m_states)
+    // Dibujar Terreno
+    if (m_terrain)
     {
         m_terrain->SetViewMatrix(viewMatrix);
         m_terrain->SetProjectionMatrix(projectionMatrix);
-        auto sampler = m_states->LinearWrap();
-        context->PSSetSamplers(0, 1, &sampler);
-        m_terrain->Render(
-            context,
-            m_lightPropertiesCB.Get(),
-            m_samplerState.Get(),
-            m_camera->GetPosition(),
-            m_lightViewMatrix * m_lightProjectionMatrix,
-            m_shadowMapSRV.Get(),
-            m_shadowSamplerState.Get()
-        );
+        m_terrain->Render(context, m_lightPropertiesCB.Get(), m_samplerState.Get(), m_camera->GetPosition(),
+            m_lightViewMatrix * m_lightProjectionMatrix, m_shadowMapSRV.Get(), m_shadowSamplerState.Get());
     }
 
+    // Dibujar Modelos
+    context->RSSetState(m_states->CullNone());
+
+    // Dibujar Modelos
     for (const auto& instance : m_worldInstances)
     {
-        if (instance.baseModel && m_samplerState && m_lightPropertiesCB)
+        if (instance.baseModel)
         {
-            // 1. Establecer la matriz de mundo del modelo con la de la instancia ACTUAL
+            // 1. Establecer la matriz de mundo
             instance.baseModel->SetWorldMatrix(instance.worldTransform);
 
-            // 2. (Opcional) Establecer estados de renderizado específicos del modelo si es necesario
-            // Esto es importante si diferentes tipos de modelos usan diferentes CullModes, por ejemplo.
-            if (instance.baseModel == m_green_tree1.get()) {
-                context->RSSetState(m_states->CullClockwise()); // Como lo tenías para green_tree
-            }
-            else {
-                // Para la mayoría de los otros modelos (pinos, herrero, carreta, rocas, molino) usabas CullNone.
-                context->RSSetState(m_states->CullNone());
-            }
-            // Si todos usan el mismo (ej. CullNone o CullCounterClockwise), puedes ponerlo antes del bucle.
+            // 2. Ya no cambiamos el estado aquí dentro, porque es el mismo para todos
 
-            // 3. Dibujar el modelo
+            // 3. Dibujar
             instance.baseModel->EvolvingDraw(
                 context,
                 viewMatrix,
@@ -435,27 +441,17 @@ void Game::Render()
                 m_shadowMapSRV.Get(),
                 m_shadowSamplerState.Get()
             );
-
-            // 4. Recolectar BoundingSphere para debug (ahora usa la worldTransform de la instancia)
-            if (m_drawDebugCollisions) {
-                m_modelSpheresToDraw.push_back(instance.baseModel->GetOverallWorldBoundingSphere());
-            }
         }
     }
-
-    if (m_states) context->RSSetState(m_states->CullCounterClockwise());
-
-    m_deviceResources->PIXEndEvent();
+    // Restaurar el estado por defecto después del bucle
+    context->RSSetState(m_states->CullCounterClockwise());
 
     if (m_drawDebugCollisions)
     {
         m_deviceResources->PIXBeginEvent(L"Render Debug Collisions");
-        // auto context = m_deviceResources->GetD3DDeviceContext(); // Ya definido arriba
 
         context->RSSetState(m_states->Wireframe());
-        // Opcional: context->OMSetDepthStencilState(m_states->DepthRead(), 0);
 
-        // 1. Dibujar la BoundingBox de la Cámara (m_cameraBoxToDraw se llena en Update)
         if (m_cameraBoxToDraw.Extents.x > 0)
         {
             DirectX::SimpleMath::Matrix cameraBoxWorld =
@@ -466,7 +462,6 @@ void Game::Render()
             m_debugBoxDrawer->Draw(cameraBoxWorld, viewMatrix, projectionMatrix, DirectX::Colors::Yellow);
         }
 
-        // 2. Dibujar las BoundingSpheres de los Modelos (recolectadas en el bucle de instancias de Render)
         for (const auto& sphere : m_modelSpheresToDraw)
         {
             if (sphere.Radius > 0)
@@ -477,8 +472,7 @@ void Game::Render()
             }
         }
 
-        // 3. Dibujar las BoundingBoxes de las Partes de los Modelos (recolectadas en Update)
-        for (const auto& box : m_modelPartBoxesToDraw) // m_modelPartBoxesToDraw se llena en Update
+        for (const auto& box : m_modelPartBoxesToDraw) 
         {
             if (box.Extents.x > 0)
             {
@@ -491,23 +485,16 @@ void Game::Render()
             }
         }
 
-        // m_modelSpheresToDraw.clear(); // Ya se limpia al inicio de Render si m_drawDebugCollisions es true.
-        // m_modelPartBoxesToDraw se limpia en Update.
 
         context->RSSetState(m_states->CullCounterClockwise());
-        // if (m_states) context->OMSetDepthStencilState(m_states->DepthDefault(), 0); // Si lo cambiaste
 
         m_deviceResources->PIXEndEvent();
     }
 
 
-
-    m_deviceResources->PIXBeginEvent(L"Render SkyDome");
-    // --- DIBUJAR EL SKYDOME (DESPUÉS DE LOS OPACOS) ---
-    if (m_skySphere && m_skyEffect && m_skyInputLayout && m_states && m_skyDepthState && m_camera)
+    if (m_skySphere && m_skyEffect)
     {
         DirectX::SimpleMath::Matrix skyWorldMatrix = DirectX::SimpleMath::Matrix::CreateScale(m_camera->GetFarPlane() * 0.9f);
-        // DirectX::SimpleMath::Matrix skyWorldMatrix = DirectX::SimpleMath::Matrix::CreateScale(500.f); // O un tamaño fijo grande
         skyWorldMatrix *= DirectX::SimpleMath::Matrix::CreateTranslation(m_camera->GetPosition());
 
         m_skyEffect->SetWorld(skyWorldMatrix);
@@ -524,8 +511,7 @@ void Game::Render()
         context->OMGetDepthStencilState(&oldDepthState, &stencilRef);
 
         context->RSSetState(m_states->CullClockwise());
-        // O m_states->CullNone() si tienes dudas sobre el winding.
-        context->OMSetDepthStencilState(m_skyDepthState.Get(), 0); // Usa el estado personalizado (LESS_EQUAL, ZWrite=OFF)
+        context->OMSetDepthStencilState(m_skyDepthState.Get(), 0);
 
         m_skySphere->Draw(m_skyEffect.get(), m_skyInputLayout.Get());
 
@@ -533,20 +519,198 @@ void Game::Render()
         if (oldDepthState)
         {
             context->OMSetDepthStencilState(oldDepthState, stencilRef);
-            oldDepthState->Release(); // Liberar la referencia obtenida por OMGetDepthStencilState
+            oldDepthState->Release();
         }
+
+        // ESTE BLOQUE DE LIMPIEZA DENTRO DEL SKYDOME ES CRUCIAL
+        context->VSSetShader(nullptr, nullptr, 0);
+        context->PSSetShader(nullptr, nullptr, 0);
+        context->GSSetShader(nullptr, nullptr, 0);
+        context->HSSetShader(nullptr, nullptr, 0);
+        context->DSSetShader(nullptr, nullptr, 0);
+
+        ID3D11Buffer* nullBuffer[] = { nullptr };
+        UINT stride = 0;
+        UINT offset = 0;
+        context->IASetVertexBuffers(0, 1, nullBuffer, &stride, &offset);
+        context->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
+        context->IASetInputLayout(nullptr);
+
+        context->OMSetBlendState(m_states->Opaque(), nullptr, 0xFFFFFFFF);
+        context->OMSetDepthStencilState(m_states->DepthDefault(), 0);
+        context->RSSetState(m_states->CullCounterClockwise());
+    }
+
+
+    m_deviceResources->PIXEndEvent(); // Fin del renderizado de la escena 3D
+
+
+    // ====================================================================
+    // PASO 2: POST-PROCESAMIENTO - BLOOM
+    // ====================================================================
+    m_deviceResources->PIXBeginEvent(L"2. Post-Processing: Bloom");
+
+    // Ya no necesitamos el buffer de profundidad para los pases de post-procesamiento
+    ID3D11RenderTargetView* nullRTV = nullptr;
+    context->OMSetRenderTargets(1, &nullRTV, nullptr); // Desvincular todo temporalmente
+
+    // --- 2a. Extraer Píxeles Brillantes ---
+    m_deviceResources->PIXBeginEvent(L"Bloom - Extract Brightness");
+    context->OMSetRenderTargets(1, m_bloomExtractRTV.GetAddressOf(), nullptr);
+    D3D11_VIEWPORT bloomViewport = { 0.0f, 0.0f, static_cast<float>(mainViewport.Width / 2), static_cast<float>(mainViewport.Height / 2), 0.0f, 1.0f };
+    context->RSSetViewports(1, &bloomViewport);
+
+    context->VSSetShader(m_fullscreenQuadVS.Get(), nullptr, 0);
+    context->PSSetShader(m_bloomExtractPS.Get(), nullptr, 0);
+    context->PSSetShaderResources(0, 1, m_sceneSRV.GetAddressOf());
+    context->PSSetSamplers(0, 1, m_samplerState.GetAddressOf());
+
+    D3D11_MAPPED_SUBRESOURCE mappedResource;
+    context->Map(m_cbBloomParameters.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+    memcpy(mappedResource.pData, &m_bloomParamsData, sizeof(CB_BloomParameters));
+    context->Unmap(m_cbBloomParameters.Get(), 0);
+    context->PSSetConstantBuffers(0, 1, m_cbBloomParameters.GetAddressOf());
+
+    context->IASetInputLayout(nullptr);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->Draw(3, 0);
+    m_deviceResources->PIXEndEvent();
+
+    // --- 2b. Desenfoque Gaussiano (Ping-Pong) ---
+    m_deviceResources->PIXBeginEvent(L"Bloom - Gaussian Blur");
+
+    // Actualizar el Constant Buffer de Blur (solo se necesita una vez)
+    m_blurParamsData.texelSize = { 1.0f / (mainViewport.Width / 2.0f), 1.0f / (mainViewport.Height / 2.0f) };
+    context->Map(m_cbBlurParameters.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+    memcpy(mappedResource.pData, &m_blurParamsData, sizeof(CB_BlurParameters));
+    context->Unmap(m_cbBlurParameters.Get(), 0);
+    context->PSSetConstantBuffers(0, 1, m_cbBlurParameters.GetAddressOf());
+
+    // Hacemos varios pases para un desenfoque más suave y amplio
+    for (int i = 0; i < 2; ++i)
+    {
+        // --- PASE HORIZONTAL ---
+        // El resultado se dibuja en m_blurRTV
+        context->OMSetRenderTargets(1, m_blurRTV.GetAddressOf(), nullptr);
+        context->PSSetShader(m_gaussianBlurHorizontalPS.Get(), nullptr, 0);
+        // La entrada es la textura de los puntos brillantes
+        context->PSSetShaderResources(0, 1, m_bloomExtractSRV.GetAddressOf());
+        context->Draw(3, 0);
+
+        // Desvinculamos la textura de extracción para poder usarla como objetivo en el siguiente paso
+        ID3D11ShaderResourceView* nullSRV[] = { nullptr };
+        context->PSSetShaderResources(0, 1, nullSRV);
+
+        // --- PASE VERTICAL ---
+        // El resultado se dibuja de vuelta en m_bloomExtractRTV
+        context->OMSetRenderTargets(1, m_bloomExtractRTV.GetAddressOf(), nullptr);
+        context->PSSetShader(m_gaussianBlurVerticalPS.Get(), nullptr, 0);
+        // La entrada es la textura que acabamos de desenfocar horizontalmente
+        context->PSSetShaderResources(0, 1, m_blurSRV.GetAddressOf());
+        context->Draw(3, 0);
+
+        // Desvinculamos la textura de blur para el siguiente ciclo
+        context->PSSetShaderResources(0, 1, nullSRV);
+    }
+    m_deviceResources->PIXEndEvent();
+
+    // --- 2c. Composición Final ---
+    m_deviceResources->PIXBeginEvent(L"Bloom - Composite to Back Buffer");
+    context->OMSetRenderTargets(1, &finalRTV, nullptr); // ¡Ahora sí, al back buffer de la ventana!
+    context->RSSetViewports(1, &mainViewport);
+
+    context->PSSetShader(m_bloomCompositePS.Get(), nullptr, 0);
+    context->PSSetConstantBuffers(0, 1, m_cbBloomParameters.GetAddressOf());
+
+    ID3D11ShaderResourceView* compositeSRVs[] = { m_sceneSRV.Get(), m_bloomExtractSRV.Get() }; // Usar la textura de extracción ya desenfocada
+    context->PSSetShaderResources(0, 2, compositeSRVs);
+    context->Draw(3, 0);
+    m_deviceResources->PIXEndEvent();
+
+    m_deviceResources->PIXEndEvent(); // Fin del post-procesamiento
+
+    context->OMSetRenderTargets(1, &finalRTV, depthStencil);
+
+    ID3D11ShaderResourceView* nullSRVs[] = { nullptr, nullptr, nullptr, nullptr };
+    context->PSSetShaderResources(0, 4, nullSRVs);
+    context->VSSetShader(nullptr, nullptr, 0);
+    context->PSSetShader(nullptr, nullptr, 0);
+    context->GSSetShader(nullptr, nullptr, 0);
+    context->IASetInputLayout(nullptr);
+    if (m_states)
+    {
+        context->OMSetBlendState(m_states->Opaque(), nullptr, 0xFFFFFFFF);
+        context->OMSetDepthStencilState(m_states->DepthDefault(), 0);
+        context->RSSetState(m_states->CullCounterClockwise());
+    }
+
+    m_deviceResources->PIXBeginEvent(L"Render Firefly Particles");
+    if (m_sunPower < 0.15f)
+    {
+        // --- REEMPLAZA TODO EL BLOQUE DE m_spriteBatch3D POR ESTO ---
+
+        // 1. Configurar el pipeline para el renderizado de partculas
+        context->VSSetShader(m_fireflyVS.Get(), nullptr, 0);
+        context->PSSetShader(m_fireflyPS.Get(), nullptr, 0);
+        context->IASetInputLayout(m_fireflyInputLayout.Get());
+
+        // Geometra del quad (la misma para todas las partculas)
+        UINT stride = sizeof(DirectX::VertexPositionTexture);
+        UINT offset = 0;
+        context->IASetVertexBuffers(0, 1, m_fireflyVertexBuffer.GetAddressOf(), &stride, &offset);
+        context->IASetIndexBuffer(m_fireflyIndexBuffer.Get(), DXGI_FORMAT_R16_UINT, 0);
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        // Estados de renderizado (mezcla aditiva, sin escritura de profundidad)
+        context->OMSetBlendState(m_states->Additive(), nullptr, 0xFFFFFFFF);
+        context->OMSetDepthStencilState(m_states->DepthRead(), 0); // Leemos la profundidad para que se oculten detrs de objetos, pero no escribimos en ella
+        context->RSSetState(m_states->CullNone());
+
+        // 2. Configurar el Constant Buffer "PerFrame" (una sola vez)
+        D3D11_MAPPED_SUBRESOURCE mappedResource;
+        context->Map(m_cbFireflyPerFrame.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+        auto perFrameData = reinterpret_cast<CB_Firefly_PerFrame*>(mappedResource.pData);
+        perFrameData->ViewProjection = m_camera->GetViewMatrix() * m_camera->GetProjectionMatrix();
+        perFrameData->CameraRight_World = m_camera->GetRight();
+        perFrameData->CameraUp_World = m_camera->GetUp();
+        context->Unmap(m_cbFireflyPerFrame.Get(), 0);
+        context->VSSetConstantBuffers(0, 1, m_cbFireflyPerFrame.GetAddressOf());
+
+        // 3. Vincular recursos del Pixel Shader (textura y sampler)
+        context->PSSetShaderResources(0, 1, m_fireflyTexture.GetAddressOf());
+        context->PSSetSamplers(0, 1, m_samplerState.GetAddressOf());
+
+        // 4. Bucle para dibujar cada partcula
+        for (const auto& firefly : m_fireflies)
+        {
+            // Actualizar el Constant Buffer "PerParticle" para esta lucirnaga
+            context->Map(m_cbFireflyPerParticle.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+            auto perParticleData = reinterpret_cast<CB_Firefly_PerParticle*>(mappedResource.pData);
+
+            float blink = (sin(firefly.blinkTimer) + 1.0f) / 2.0f;
+            blink = pow(blink, 3.0f);
+
+            perParticleData->ParticleCenter_World = firefly.position;
+            perParticleData->ParticleColor = DirectX::SimpleMath::Vector4(1.5f, 2.0f, 1.0f, 1.0f) * blink;
+            perParticleData->ParticleSize = { 0.5f, 0.5f }; // <--- JUEGA CON ESTE TAMAO!
+
+            context->Unmap(m_cbFireflyPerParticle.Get(), 0);
+            context->VSSetConstantBuffers(1, 1, m_cbFireflyPerParticle.GetAddressOf());
+
+            // Dibujar el quad
+            context->DrawIndexed(6, 0, 0);
+        }
+
+        // MUY IMPORTANTE: Restaurar el estado de profundidad por defecto despus de terminar
+        context->OMSetDepthStencilState(m_states->DepthDefault(), 0);
     }
     m_deviceResources->PIXEndEvent();
 
 
-
-
-
-    m_deviceResources->PIXBeginEvent(L"Render UI");
-    if (m_spriteBatch && m_font && m_camera)
+    m_deviceResources->PIXBeginEvent(L"3. Render UI");
+    if (m_spriteBatchUI)
     {
-        m_spriteBatch->Begin(); // Inicia el lote de sprites
-
+        m_spriteBatchUI->Begin(SpriteSortMode_Deferred, m_states->AlphaBlend());
         wchar_t buffer[256];
         // Mostramos Posición X, Y, Z y Rotación Yaw, Pitch en grados para facilitar la lectura
         swprintf_s(buffer, L"Pos: (%.2f, %.2f, %.2f)\nYaw: %.1f deg\nPitch: %.1f deg",
@@ -557,10 +721,10 @@ void Game::Render()
         DirectX::SimpleMath::Vector2 textPosition(10.0f, 10.0f);
         DirectX::SimpleMath::Vector4 textColor(1.0f, 1.0f, 0.0f, 1.0f);
 
-        m_font->DrawString(m_spriteBatch.get(), buffer, textPosition, textColor);
+        m_font->DrawString(m_spriteBatchUI.get(), buffer, textPosition, textColor);
 
         RECT minimapRect = { 10, 150, 10 + MINIMAP_SIZE, 150 + MINIMAP_SIZE };
-        m_spriteBatch->Draw(m_minimapSRV.Get(), minimapRect);
+        m_spriteBatchUI->Draw(m_minimapSRV.Get(), minimapRect);
 
         // 2. Dibuja el icono del jugador en el centro del minimapa
         ComPtr<ID3D11Resource> playerIconResource;
@@ -576,31 +740,21 @@ void Game::Render()
         // Rotamos el icono segn el Yaw de la cmara
         float playerRotation = -m_camera->GetYaw();
 
-        m_spriteBatch->Draw(m_playerIconTexture.Get(), playerIconPos, nullptr, Colors::White, playerRotation, playerIconOrigin);
-
-        m_spriteBatch->End(); // Finaliza el lote y dibuja los sprites
-    }
-    m_deviceResources->PIXEndEvent();
-
-    if (m_spriteBatch)
-    {
-        m_spriteBatch->Begin();
+        m_spriteBatchUI->Draw(m_playerIconTexture.Get(), playerIconPos, nullptr, Colors::White, playerRotation, playerIconOrigin);
 
         RECT outputSize = m_deviceResources->GetOutputSize();
         long width = outputSize.right - outputSize.left;
 
         RECT shadowMapRect = { width - 266, 10, width - 10, 266 };
-        m_spriteBatch->Draw(m_shadowMapSRV.Get(), shadowMapRect);
+        m_spriteBatchUI->Draw(m_shadowMapSRV.Get(), shadowMapRect);
 
-        m_spriteBatch->End();
+        m_spriteBatchUI->End();
     }
-
     m_deviceResources->PIXEndEvent();
-    
-    ID3D11ShaderResourceView* nullSRVs[] = { nullptr, nullptr, nullptr, nullptr };
-    context->PSSetShaderResources(0, 4, nullSRVs); 
 
-
+    // ====================================================================
+    // PASO 4: PRESENTAR EL CUADRO FINAL
+    // ====================================================================
     m_deviceResources->Present();
 }
 
@@ -782,8 +936,30 @@ void Game::CreateDeviceDependentResources()
     m_camera->UpdateViewMatrix(); // Asegura que la matriz de vista se calcule inicialmente
     
 
-    m_spriteBatch = std::make_unique<DirectX::SpriteBatch>(context);
+    m_spriteBatch3D = std::make_unique<DirectX::SpriteBatch>(context);
+    m_spriteBatchUI = std::make_unique<DirectX::SpriteBatch>(context);
     m_font = std::make_unique<DirectX::SpriteFont>(device, L"GameAssets\\Fonts\\GameFont.spritefont");
+
+    m_spriteEffect = std::make_unique<BasicEffect>(device);
+    m_spriteEffect->SetTextureEnabled(true);
+    m_spriteEffect->SetVertexColorEnabled(true);
+
+    void const* shaderBytecode;
+    size_t byteCodeLength;
+
+    m_spriteEffect->GetVertexShaderBytecode(&shaderBytecode, &byteCodeLength);
+
+    hr = device->CreateInputLayout(
+        DirectX::VertexPositionColorTexture::InputElements,
+        DirectX::VertexPositionColorTexture::InputElementCount,
+        shaderBytecode,
+        byteCodeLength,
+        m_spriteInputLayout.ReleaseAndGetAddressOf());
+
+    if (FAILED(hr))
+    {
+        throw std::runtime_error("Failed to create sprite input layout.");
+    }
 
     hr = DirectX::CreateWICTextureFromFile(device, L"GameAssets\\textures\\dome2.png", nullptr,
         m_skyTextureSRV.ReleaseAndGetAddressOf());
@@ -804,8 +980,6 @@ void Game::CreateDeviceDependentResources()
     m_skyEffect->SetLightingEnabled(false); 
 
     // 4. Crear el Input Layout para el BasicEffect
-    void const* shaderBytecode;
-    size_t byteCodeLength;
     m_skyEffect->GetVertexShaderBytecode(&shaderBytecode, &byteCodeLength); 
 
     hr = device->CreateInputLayout(
@@ -1144,6 +1318,11 @@ void Game::CreateDeviceDependentResources()
     m_rock6->SetScale(1.0f);
     m_rock6->SetRotationEuler(DirectX::XM_PI, 0.0f, 0.0f);
 
+    hr = CreateWICTextureFromFile(device, L"GameAssets\\textures\\firefly.png", nullptr, m_fireflyTexture.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al cargar la textura de la luciernaga.");
+
+    InitializeFireflies();
+
     m_worldInstances.clear();
 
     const float offsetY_pine1 = -7.0f;
@@ -1225,6 +1404,68 @@ void Game::CreateDeviceDependentResources()
         AddInstancedObject(m_rock1.get(), baseTransform, -79.10f, -118.56f, 5.0f, offsetY_rock);
     }
 
+    DirectX::VertexPositionTexture quadVertices[] =
+    {
+        { DirectX::SimpleMath::Vector3(-0.5f,  0.5f, 0.f), DirectX::SimpleMath::Vector2(0, 0) }, // Top-Left
+        { DirectX::SimpleMath::Vector3(0.5f,  0.5f, 0.f), DirectX::SimpleMath::Vector2(1, 0) }, // Top-Right
+        { DirectX::SimpleMath::Vector3(0.5f, -0.5f, 0.f), DirectX::SimpleMath::Vector2(1, 1) }, // Bottom-Right
+        { DirectX::SimpleMath::Vector3(-0.5f, -0.5f, 0.f), DirectX::SimpleMath::Vector2(0, 1) }, // Bottom-Left
+    };
+
+    D3D11_BUFFER_DESC vbd = {};
+    vbd.Usage = D3D11_USAGE_DEFAULT;
+    vbd.ByteWidth = sizeof(DirectX::VertexPositionTexture) * 4;
+    vbd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA vinitData = { quadVertices, 0, 0 };
+    hr = device->CreateBuffer(&vbd, &vinitData, m_fireflyVertexBuffer.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el vertex buffer de las lucirnagas.");
+
+    unsigned short quadIndices[] = { 0, 1, 2, 0, 2, 3 };
+
+    D3D11_BUFFER_DESC ibd = {};
+    ibd.Usage = D3D11_USAGE_DEFAULT;
+    ibd.ByteWidth = sizeof(unsigned short) * 6;
+    ibd.BindFlags = D3D11_BIND_INDEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA iinitData = { quadIndices, 0, 0 };
+    hr = device->CreateBuffer(&ibd, &iinitData, m_fireflyIndexBuffer.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el index buffer de las lucirnagas.");
+
+    // 2. Cargar y crear los shaders de las lucirnagas
+    Microsoft::WRL::ComPtr<ID3DBlob> vsBlob, psBlob;
+    hr = D3DReadFileToBlob(L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\FireflyVS.cso", vsBlob.GetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al cargar FireflyVS.cso.");
+    hr = device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, m_fireflyVS.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el Firefly Vertex Shader.");
+
+    hr = D3DReadFileToBlob(L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\FireflyPS.cso", psBlob.GetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al cargar FireflyPS.cso.");
+    hr = device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, m_fireflyPS.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el Firefly Pixel Shader.");
+
+    // 3. Crear el Input Layout para los vrtices del quad
+    const D3D11_INPUT_ELEMENT_DESC fireflyLayoutDesc[] =
+    {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,    0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    };
+
+    hr = device->CreateInputLayout(
+        fireflyLayoutDesc,
+        ARRAYSIZE(fireflyLayoutDesc), // Usamos ARRAYSIZE para obtener el número de elementos en nuestro array.
+        vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(),
+        m_fireflyInputLayout.ReleaseAndGetAddressOf());
+
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el input layout de las lucirnagas.");
+    // 4. Crear los Constant Buffers
+    CD3D11_BUFFER_DESC cbd(sizeof(CB_Firefly_PerFrame), D3D11_BIND_CONSTANT_BUFFER, D3D11_USAGE_DYNAMIC, D3D11_CPU_ACCESS_WRITE);
+    hr = device->CreateBuffer(&cbd, nullptr, m_cbFireflyPerFrame.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el CB PerFrame de las lucirnagas.");
+
+    cbd.ByteWidth = sizeof(CB_Firefly_PerParticle);
+    hr = device->CreateBuffer(&cbd, nullptr, m_cbFireflyPerParticle.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear el CB PerParticle de las lucirnagas.");
+
+
     D3D11_TEXTURE2D_DESC texDesc = {};
     texDesc.Width = SHADOW_MAP_SIZE;
     texDesc.Height = SHADOW_MAP_SIZE;
@@ -1255,7 +1496,7 @@ void Game::CreateDeviceDependentResources()
     if (FAILED(hr)) throw std::runtime_error("Fallo al crear el SRV del shadow map.");
 
     D3D11_SAMPLER_DESC samplerDesc = {};
-    samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_POINT;
+    samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR;
     samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_BORDER;
     samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_BORDER;
     samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_BORDER;
@@ -1275,20 +1516,16 @@ void Game::CreateDeviceDependentResources()
 
     // --- NUEVA CONFIGURACIN DE BIAS ---
     // Un bias fijo moderado para evitar fugas de luz a gran escala.
-    rasterDesc.DepthBias = 100; // Aumentamos de 0 a 100.
 
+    rasterDesc.CullMode = D3D11_CULL_FRONT;
+    rasterDesc.DepthBias = 100;  // Un bias constante pequeo para polgonos casi perpendiculares.
     rasterDesc.DepthBiasClamp = 0.0f;
-
-    // Un bias de pendiente ms fuerte para combatir el acn en ngulos pronunciados.
-    rasterDesc.SlopeScaledDepthBias = 4.0f; // Aumentamos de 2.0 a 4.0
+    rasterDesc.SlopeScaledDepthBias = 1.0f;// Aumentamos de 2.0 a 4.0
     // --- FIN DE LA NUEVA CONFIGURACIN ---
 
     hr = device->CreateRasterizerState(&rasterDesc, m_shadowRasterizerState.ReleaseAndGetAddressOf());
     if (FAILED(hr)) throw std::runtime_error("Fallo al crear el estado de rasterizador para sombras.");
 
-
-    Microsoft::WRL::ComPtr<ID3DBlob> vsBlob;
-    Microsoft::WRL::ComPtr<ID3DBlob> psBlob;
 
 
     // ¡ASEGÚRATE DE QUE LA RUTA A TU SHADER SEA CORRECTA!
@@ -1368,6 +1605,39 @@ void Game::CreateDeviceDependentResources()
         throw std::runtime_error("Fallo al crear el estado de profundidad para sombras.");
     }
 
+    hr = D3DReadFileToBlob(L"\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\FullscreenQuadVS.cso", vsBlob.GetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al cargar FullscreenQuadVS.cso");
+    hr = device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, m_fullscreenQuadVS.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear FullscreenQuadVS");
+
+    hr = D3DReadFileToBlob(L"\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\BloomExtractPS.cso", psBlob.GetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al cargar BloomExtractPS.cso");
+    hr = device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, m_bloomExtractPS.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear BloomExtractPS");
+    
+    hr = D3DReadFileToBlob(L"\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\GaussianBlurHorizontalPS.cso", psBlob.GetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al cargar GaussianBlurHorizontalPS.cso");
+    hr = device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, m_gaussianBlurHorizontalPS.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear GaussianBlurHorizontalPS");
+
+    hr = D3DReadFileToBlob(L"\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\GaussianBlurVerticalPS.cso", psBlob.GetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al cargar GaussianBlurVerticalPS.cso");
+    hr = device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, m_gaussianBlurVerticalPS.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear GaussianBlurVerticalPS");
+    
+    hr = D3DReadFileToBlob(L"\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\BloomCompositePS.cso", psBlob.GetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al cargar BloomCompositePS.cso");
+    hr = device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, m_bloomCompositePS.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear BloomCompositePS");
+
+    // --- NUEVO: CREAR CONSTANT BUFFERS DE POST-PROCESAMIENTO ---
+    CD3D11_BUFFER_DESC cbDesc(sizeof(CB_BloomParameters), D3D11_BIND_CONSTANT_BUFFER, D3D11_USAGE_DYNAMIC, D3D11_CPU_ACCESS_WRITE);
+    hr = device->CreateBuffer(&cbDesc, nullptr, m_cbBloomParameters.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear CB de Bloom");
+
+    cbDesc.ByteWidth = sizeof(CB_BlurParameters);
+    hr = device->CreateBuffer(&cbDesc, nullptr, m_cbBlurParameters.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear CB de Blur");
 
 
     device;
@@ -1375,15 +1645,55 @@ void Game::CreateDeviceDependentResources()
 
 void Game::CreateWindowSizeDependentResources()
 {
-    // TODO: Initialize windows-size dependent objects here.
+    // Liberar recursos antiguos
+    m_sceneTexture.Reset(); m_sceneRTV.Reset(); m_sceneSRV.Reset();
+    m_bloomExtractTexture.Reset(); m_bloomExtractRTV.Reset(); m_bloomExtractSRV.Reset();
+    m_blurTexture.Reset(); m_blurRTV.Reset(); m_blurSRV.Reset();
+
+    RECT outputSize = m_deviceResources->GetOutputSize();
+    int width = outputSize.right - outputSize.left;
+    int height = outputSize.bottom - outputSize.top;
 
     if (m_camera)
     {
-        RECT outputSize = m_deviceResources->GetOutputSize();
-        int width = outputSize.right - outputSize.left;
-        int height = outputSize.bottom - outputSize.top;
         m_camera->UpdateProjectionMatrix(width, height);
     }
+
+    if (width == 0 || height == 0) return;
+
+    auto device = m_deviceResources->GetD3DDevice();
+    HRESULT hr;
+
+    // Usamos un formato de alta precisión para permitir colores más brillantes que 1.0 (HDR)
+    DXGI_FORMAT hdrFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+    // Textura de la escena principal (resolución completa)
+    CD3D11_TEXTURE2D_DESC sceneDesc(hdrFormat, width, height, 1, 1, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, D3D11_USAGE_DEFAULT, 0, 1);
+    hr = device->CreateTexture2D(&sceneDesc, nullptr, m_sceneTexture.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear textura de escena");
+    hr = device->CreateRenderTargetView(m_sceneTexture.Get(), nullptr, m_sceneRTV.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear RTV de escena");
+    hr = device->CreateShaderResourceView(m_sceneTexture.Get(), nullptr, m_sceneSRV.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear SRV de escena");
+
+    // Texturas de Bloom y Blur (a menor resolución para mejor rendimiento y un look más suave)
+    int bloomWidth = width / 2;
+    int bloomHeight = height / 2;
+    CD3D11_TEXTURE2D_DESC bloomDesc(hdrFormat, bloomWidth, bloomHeight, 1, 1, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, D3D11_USAGE_DEFAULT, 0, 1);
+
+    hr = device->CreateTexture2D(&bloomDesc, nullptr, m_bloomExtractTexture.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear textura de extracción de bloom");
+    hr = device->CreateRenderTargetView(m_bloomExtractTexture.Get(), nullptr, m_bloomExtractRTV.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear RTV de extracción de bloom");
+    hr = device->CreateShaderResourceView(m_bloomExtractTexture.Get(), nullptr, m_bloomExtractSRV.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear SRV de extracción de bloom");
+
+    hr = device->CreateTexture2D(&bloomDesc, nullptr, m_blurTexture.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear textura de blur");
+    hr = device->CreateRenderTargetView(m_blurTexture.Get(), nullptr, m_blurRTV.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear RTV de blur");
+    hr = device->CreateShaderResourceView(m_blurTexture.Get(), nullptr, m_blurSRV.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) throw std::runtime_error("Fallo al crear SRV de blur");
 }
 
 void Game::OnDeviceLost()
@@ -1464,7 +1774,7 @@ void Game::RenderShadowPass()
     {
         if (instance.baseModel)
         {
-            context->RSSetState(m_shadowRasterizerState.Get()); // Usa el estado de culling normal
+            context->RSSetState(m_shadowRasterizerState_CullFront.Get()); 
 
             bool usesAlphaClip = (instance.baseModel == m_green_tree1.get() ||
                 instance.baseModel == m_forest_pine1.get() ||
@@ -1477,7 +1787,7 @@ void Game::RenderShadowPass()
             }
             else
             {
-                context->PSSetShader(m_shadowPixelShader.Get(), nullptr, 0);
+                context->PSSetShader(nullptr, nullptr, 0);
             }
 
             // Usamos siempre la funcin de dibujado ms completa
@@ -1488,7 +1798,8 @@ void Game::RenderShadowPass()
     // 4. Dibujar el terreno (slido, no necesita alfa)
     if (m_terrain)
     {
-        context->PSSetShader(m_shadowPixelShader.Get(), nullptr, 0);
+        context->RSSetState(m_shadowRasterizerState_CullFront.Get());
+        context->PSSetShader(nullptr, nullptr, 0);
         m_terrain->ShadowDraw(context, m_lightViewMatrix, m_lightProjectionMatrix);
     }
 }
@@ -1550,6 +1861,165 @@ void Game::RenderMinimapPass()
                 m_shadowSamplerState.Get()
             );
         }
+    }
+}
+
+#pragma endregion
+
+#pragma DayNight Cycle
+
+DirectX::SimpleMath::Vector4 LerpColor(const DirectX::SimpleMath::Vector4& a, const DirectX::SimpleMath::Vector4& b, float t)
+{
+    return DirectX::SimpleMath::Vector4::Lerp(a, b, t);
+}
+
+
+void Game::UpdateDayNightCycle(float elapsedTime)
+{
+    // 1. AVANZAR LA HORA DEL DÍA (Sin cambios)
+    m_timeOfDay += elapsedTime * m_dayNightCycleSpeed;
+    m_timeOfDay = fmodf(m_timeOfDay, 1.0f);
+
+    // --- CÁLCULOS DE DIRECCIÓN (Sin cambios, ya son correctos para tu eje Y) ---
+    const float cycleAngle = m_timeOfDay * 2.0f * DirectX::XM_PI;
+    Vector3 sunDirection = Vector3(-cos(cycleAngle), -sin(cycleAngle), 0.3f);
+    sunDirection.Normalize();
+
+    Vector3 moonDirection = Vector3(0.1f, -0.7f, 0.1f);
+    moonDirection.Normalize();
+    m_sunPower = std::clamp(-sunDirection.y, 0.0f, 1.0f);
+    Vector3 finalLightDirection = Vector3::Lerp(moonDirection, sunDirection, m_sunPower);
+    finalLightDirection.Normalize();
+    m_lightData.directionalLightVector = finalLightDirection;
+
+    // ====================================================================
+    // 6. MEZCLAR COLORES E INTENSIDADES (LÓGICA MEJORADA PARA DRAMATISMO)
+    // ====================================================================
+
+    // --- NUEVA PALETA DE COLORES ---
+    // Puedes ajustar estos colores para conseguir el look que quieras
+    const Vector4 HORIZON_RED(1.0f, 0.2f, 0.1f, 1.0f);           // Rojo intenso del horizonte
+    const Vector4 GOLDEN_HOUR_ORANGE(1.0f, 0.6f, 0.2f, 1.0f);    // Naranja/dorado cálido
+    const Vector4 MIDDAY_SUN_YELLOW(1.0f, 1.0f, 0.9f, 1.0f);     // Amarillo pálido del mediodía
+    const Vector4 MOON_COLOR(0.4f, 0.5f, 0.7f, 1.0f);
+
+    // Paleta para la luz ambiental
+    const Vector4 SUNSET_AMBIENT_PURPLE(0.3f, 0.15f, 0.35f, 1.0f); // Tinte púrpura para el ambiente
+    const Vector4 DAY_AMBIENT(0.25f, 0.25f, 0.3f, 1.0f);
+    const Vector4 NIGHT_AMBIENT(0.01f, 0.015f, 0.02f, 1.0f);
+
+    // Intensidades
+    const float SUN_INTENSITY = 1.9f; // Ligeramente más intenso para potenciar los colores
+    const float MOON_INTENSITY = 0.20f;
+
+    // Variables que calcularemos en las fases
+    Vector4 currentSunColor;
+    Vector4 currentAmbientColor;
+
+    // --- LÓGICA DE FASES BASADA EN sunPower ---
+    // sunPower: 0.0 = horizonte, 1.0 = cénit
+
+    // FASE 1: Del crepúsculo al rojo del horizonte (sunPower entre 0.0 y 0.15)
+    if (m_sunPower < 0.15f)
+    {
+        // Normalizamos sunPower para que vaya de 0 a 1 dentro de este pequeño rango
+        float t = m_sunPower / 0.15f;
+        currentSunColor = LerpColor(HORIZON_RED, GOLDEN_HOUR_ORANGE, t);
+        currentAmbientColor = LerpColor(SUNSET_AMBIENT_PURPLE, DAY_AMBIENT, t);
+    }
+    // FASE 2: De la hora dorada al día normal (sunPower entre 0.15 y 0.5)
+    else if (m_sunPower < 0.5f)
+    {
+        // Normalizamos sunPower para este rango
+        float t = (m_sunPower - 0.15f) / (0.5f - 0.15f);
+        currentSunColor = LerpColor(GOLDEN_HOUR_ORANGE, MIDDAY_SUN_YELLOW, t);
+        // La luz ambiental ya ha transicionado a la normal del día
+        currentAmbientColor = DAY_AMBIENT;
+    }
+    // FASE 3: Día pleno (sunPower > 0.5)
+    else
+    {
+        currentSunColor = MIDDAY_SUN_YELLOW;
+        currentAmbientColor = DAY_AMBIENT;
+    }
+
+    // --- APLICAR LOS COLORES CALCULADOS ---
+    Vector4 sunContribution = currentSunColor * SUN_INTENSITY * m_sunPower;
+    Vector4 moonContribution = MOON_COLOR * MOON_INTENSITY * (1.0f - m_sunPower);
+    m_lightData.directionalLightColor = sunContribution + moonContribution;
+
+    // La luz ambiental es una mezcla entre la nocturna y la diurna/atardecer calculada
+    m_lightData.ambientLightColor = LerpColor(NIGHT_AMBIENT, currentAmbientColor, m_sunPower);
+
+    // ====================================================================
+    // 7. ACTUALIZAR SKYDOME (Sin cambios)
+    // ====================================================================
+    if (m_skyEffect)
+    {
+        Vector3 skyTintColor(m_lightData.ambientLightColor);
+        float skyBrightnessFactor = m_sunPower * 1.5f;
+        skyTintColor *= (1.0f + skyBrightnessFactor);
+        skyTintColor.x = std::max(skyTintColor.x, 0.01f);
+        skyTintColor.y = std::max(skyTintColor.y, 0.015f);
+        skyTintColor.z = std::max(skyTintColor.z, 0.025f);
+        m_skyEffect->SetDiffuseColor(skyTintColor);
+    }
+}
+
+void Game::ResetFirefly(FireflyParticle& particle)
+{
+    // Posición aleatoria dentro del volumen definido
+    particle.position.x = m_fireflyVolume.Center.x + (((float)rand() / RAND_MAX) * 2.f - 1.f) * m_fireflyVolume.Extents.x;
+    particle.position.y = m_fireflyVolume.Center.y + (((float)rand() / RAND_MAX) * 2.f - 1.f) * m_fireflyVolume.Extents.y;
+    particle.position.z = m_fireflyVolume.Center.z + (((float)rand() / RAND_MAX) * 2.f - 1.f) * m_fireflyVolume.Extents.z;
+
+    // Velocidad aleatoria suave para que floten
+    particle.velocity.x = (((float)rand() / RAND_MAX) * 2.f - 1.f) * 0.5f; // Movimiento lento en X
+    particle.velocity.y = (((float)rand() / RAND_MAX) * 2.f - 1.f) * 0.3f; // Movimiento lento en Y
+    particle.velocity.z = (((float)rand() / RAND_MAX) * 2.f - 1.f) * 0.5f; // Movimiento lento en Z
+
+    // Tiempo de vida aleatorio para que no desaparezcan todas a la vez
+    particle.maxLifetime = 4.0f + ((float)rand() / RAND_MAX) * 5.f; // Entre 4 y 9 segundos
+    particle.lifetime = particle.maxLifetime;
+
+    // Temporizador de parpadeo con un desfase aleatorio
+    particle.blinkTimer = ((float)rand() / RAND_MAX) * 2.0f * DirectX::XM_PI;
+    particle.rotation = ((float)rand() / RAND_MAX) * DirectX::XM_2PI;
+}
+
+void Game::InitializeFireflies()
+{
+    m_fireflies.resize(NUM_FIREFLIES);
+    for (auto& firefly : m_fireflies)
+    {
+        ResetFirefly(firefly);
+    }
+}
+
+void Game::UpdateFireflies(float elapsedTime)
+{
+
+    if (m_sunPower > 0.1f) // Si el sol tiene algo de fuerza, las luciérnagas se ocultan
+    {
+        return;
+    }
+
+    for (auto& firefly : m_fireflies)
+    {
+        firefly.lifetime -= elapsedTime;
+        if (firefly.lifetime <= 0.f)
+        {
+            ResetFirefly(firefly);
+        }
+
+        // Actualizar posición
+        firefly.position += firefly.velocity * elapsedTime;
+
+        // Añadir un movimiento suave y ondulante
+        firefly.position.y += sin(firefly.blinkTimer * 2.0f) * 0.2f * elapsedTime;
+
+        // Actualizar temporizador de parpadeo
+        firefly.blinkTimer += elapsedTime * 3.0f;
     }
 }
 

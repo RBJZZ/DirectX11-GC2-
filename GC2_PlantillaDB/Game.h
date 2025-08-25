@@ -27,6 +27,17 @@ struct GameObjectInstance
         : baseModel(model), worldTransform(transform) {
     }
 };
+
+struct FireflyParticle
+{
+    DirectX::SimpleMath::Vector3 position;
+    DirectX::SimpleMath::Vector3 velocity;
+    float lifetime;
+    float maxLifetime;
+    float blinkTimer;
+    float rotation;
+};
+
 // A basic game implementation that creates a D3D11 device and
 // provides a game loop.
 class Game final : public DX::IDeviceNotify
@@ -74,6 +85,8 @@ private:
     void CreateDeviceDependentResources();
     void CreateWindowSizeDependentResources();
 
+    void UpdateDayNightCycle(float elapsedTime);
+
     void AddInstancedObject(
         Model* modelPtr,
         const DirectX::SimpleMath::Matrix& baseTransform,
@@ -118,8 +131,41 @@ private:
     std::unique_ptr<DirectX::CommonStates>       m_states;
    
     // Fonts
-    std::unique_ptr<DirectX::SpriteBatch>   m_spriteBatch;
+    std::unique_ptr<DirectX::SpriteBatch>   m_spriteBatch3D; // Para elementos en el mundo 3D (lucirnagas)
+    std::unique_ptr<DirectX::SpriteBatch>   m_spriteBatchUI; // Para la interfaz 2D
     std::unique_ptr<DirectX::SpriteFont>    m_font;
+    std::unique_ptr<DirectX::BasicEffect>   m_spriteEffect;
+    Microsoft::WRL::ComPtr<ID3D11InputLayout> m_spriteInputLayout;
+
+    // Recursos para el Sistema de Partculas de Lucirnagas
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_fireflyVertexBuffer;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_fireflyIndexBuffer;
+
+    Microsoft::WRL::ComPtr<ID3D11VertexShader> m_fireflyVS;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader>  m_fireflyPS;
+    Microsoft::WRL::ComPtr<ID3D11InputLayout>  m_fireflyInputLayout;
+
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_cbFireflyPerFrame;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_cbFireflyPerParticle;
+
+    // Estructuras de Constant Buffers para las lucirnagas
+    struct CB_Firefly_PerFrame
+    {
+        DirectX::SimpleMath::Matrix ViewProjection;
+        DirectX::SimpleMath::Vector3 CameraUp_World;
+        float _pad0;
+        DirectX::SimpleMath::Vector3 CameraRight_World;
+        float _pad1;
+    };
+
+    struct CB_Firefly_PerParticle
+    {
+        DirectX::SimpleMath::Vector3 ParticleCenter_World;
+        float _pad0;
+        DirectX::SimpleMath::Vector2 ParticleSize;
+        float _pad1[2];
+        DirectX::SimpleMath::Vector4 ParticleColor;
+    };
 
     // SkyDome
     std::unique_ptr<DirectX::GeometricPrimitive>    m_skySphere;
@@ -127,6 +173,23 @@ private:
     std::unique_ptr<DirectX::BasicEffect>           m_skyEffect;
     Microsoft::WRL::ComPtr<ID3D11InputLayout>       m_skyInputLayout;
     Microsoft::WRL::ComPtr<ID3D11DepthStencilState> m_skyDepthState;
+
+    // Day-Night Cycle light properties
+    float m_timeOfDay;
+    float m_dayNightCycleSpeed;
+    float m_sunPower;
+
+    Microsoft::WRL::ComPtr<ID3D11RasterizerState>   m_shadowRasterizerState_CullFront;
+
+	// Fireflies
+    void InitializeFireflies();
+    void UpdateFireflies(float elapsedTime);
+    void ResetFirefly(FireflyParticle& particle);
+
+    std::vector<FireflyParticle> m_fireflies;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_fireflyTexture;
+    DirectX::BoundingBox m_fireflyVolume;
+    static const int NUM_FIREFLIES = 300;
 
     // Terrain
     std::unique_ptr<Terrain> m_terrain;
@@ -179,7 +242,6 @@ private:
     Microsoft::WRL::ComPtr<ID3D11VertexShader> m_shadowVertexShader;
     Microsoft::WRL::ComPtr<ID3D11PixelShader>  m_shadowPixelShader;
     Microsoft::WRL::ComPtr<ID3D11InputLayout>  m_shadowInputLayout;
-    Microsoft::WRL::ComPtr<ID3D11RasterizerState>   m_shadowRasterizerState_CullFront;
 
     Microsoft::WRL::ComPtr<ID3D11VertexShader> m_shadowVertexShader_AlphaClip; 
     Microsoft::WRL::ComPtr<ID3D11PixelShader>  m_shadowPixelShader_AlphaClip;
@@ -190,10 +252,54 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Texture2D>           m_minimapTexture;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView>  m_minimapRTV;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_minimapSRV;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D>           m_minimapDepthTexture; // <--- AADE ESTA LNEA
-    Microsoft::WRL::ComPtr<ID3D11DepthStencilView>  m_minimapDSV;          // <--- AADE ESTA LNEA
+    Microsoft::WRL::ComPtr<ID3D11Texture2D>           m_minimapDepthTexture; 
+    Microsoft::WRL::ComPtr<ID3D11DepthStencilView>  m_minimapDSV;          
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_playerIconTexture;
     D3D11_VIEWPORT                                   m_minimapViewport;
     static const int MINIMAP_SIZE = 256;
 
+    // Post-processing BLOOM
+    Microsoft::WRL::ComPtr<ID3D11Texture2D>           m_sceneTexture;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView>  m_sceneRTV;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_sceneSRV;
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D>           m_bloomExtractTexture;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView>  m_bloomExtractRTV;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_bloomExtractSRV;
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D>           m_blurTexture;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView>  m_blurRTV;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_blurSRV;
+
+    Microsoft::WRL::ComPtr<ID3D11VertexShader> m_fullscreenQuadVS;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader>  m_bloomExtractPS;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader>  m_gaussianBlurHorizontalPS;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader>  m_gaussianBlurVerticalPS;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader>  m_bloomCompositePS;
+
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_cbBloomParameters;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_cbBlurParameters;
+
+    struct CB_BloomParameters
+    {
+        float bloomThreshold = 0.9f;
+        float bloomIntensity = 1.8f;
+        float sceneIntensity = 0.8f;
+        float saturation = 1.2f;
+    };
+
+    CB_BloomParameters m_bloomParamsData;
+
+    struct CB_BlurParameters
+    {
+        DirectX::SimpleMath::Vector2 texelSize;
+        float _padding1;
+        float _padding2;
+    };
+    CB_BlurParameters m_blurParamsData;
+
+    // GRADIENTS
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_colorGradingLutSRV;
+
+    
 };

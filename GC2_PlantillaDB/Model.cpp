@@ -396,6 +396,11 @@ void Model::LoadMaterials(ID3D11Device* device, ID3D11DeviceContext* context, co
             if (currentMaterial.specularPower <= 0.0f) currentMaterial.specularPower = 1.0f;
         }
 
+        if (aiGetMaterialColor(pMaterial, AI_MATKEY_COLOR_EMISSIVE, &color) == AI_SUCCESS)
+        {
+            currentMaterial.emissiveColor = Vector4(color.r, color.g, color.b, color.a);
+        }
+
         m_materials[i] = std::move(currentMaterial);
     }
     OutputDebugString(L"Materials processed.\n");
@@ -643,9 +648,10 @@ void Model::EvolvingDraw(ID3D11DeviceContext* context,
             else
             {
                 psMatDataPtr = (PSMaterialPropertiesData*)mappedResourcePSMat.pData;
-                psMatDataPtr->materialDiffuseColor = material.diffuseColor; // Asegúrate que 'material' tenga estos datos
+                psMatDataPtr->materialDiffuseColor = material.diffuseColor;
                 psMatDataPtr->materialSpecularColor = material.specularColor;
                 psMatDataPtr->specularPower = material.specularPower;
+                psMatDataPtr->emissiveColor = material.emissiveColor;
                 context->Unmap(m_cbPS_MaterialProperties.Get(), 0);
             }
             context->PSSetConstantBuffers(2, 1, m_cbPS_MaterialProperties.GetAddressOf()); // slot b2 (como en EvolvingPS.hlsl)

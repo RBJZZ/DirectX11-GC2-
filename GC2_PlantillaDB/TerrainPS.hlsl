@@ -49,6 +49,36 @@ float ApplyShadowFalloff(float currentShadowFactor, float2 shadowUV)
     return lerp(1.0f, currentShadowFactor, smoothFactor);
 }
 
+float CalculatePCFShadowFactor(Texture2D shadowTex, SamplerComparisonState shadowSamp, float4 lightSpacePos, float bias)
+{
+    // 1. Proyeccin perspectiva y coordenadas de textura
+    lightSpacePos.xyz /= lightSpacePos.w;
+    float2 shadowTexCoord = float2(lightSpacePos.x * 0.5f + 0.5f, -lightSpacePos.y * 0.5f + 0.5f);
+
+    float shadowFactor = 0.0f;
+    float2 texelSize;
+    uint width, height;
+    shadowTex.GetDimensions(width, height);
+    texelSize = float2(1.0f / width, 1.0f / height);
+
+    // 2. Bucle del kernel 5x5
+    for (int y = -2; y <= 2; y++)
+    {
+        for (int x = -2; x <= 2; x++)
+        {
+            // Muestrear y comparar la profundidad
+            shadowFactor += shadowTex.SampleCmpLevelZero(
+                shadowSamp,
+                shadowTexCoord + float2(x, y) * texelSize, // Coordenada de la muestra actual
+                lightSpacePos.z - bias // Profundidad del pxel actual con bias
+            );
+        }
+    }
+
+    // 3. Promediar los resultados
+    return shadowFactor / 25.0f; // Dividir por el nmero total de muestras (5*5=25)
+}
+
 float4 main(PixelInputType input) : SV_TARGET
 {
     // --- Mezcla de Texturas Basada en Altura ---
@@ -111,8 +141,9 @@ float4 main(PixelInputType input) : SV_TARGET
     float4 finalColor = ambient;
     
     // 2. Calculamos las coordenadas para el shadow map
-    input.positionInLightSpace.xyz /= input.positionInLightSpace.w;
-    float2 shadowTexCoord = float2(input.positionInLightSpace.x * 0.5f + 0.5f, -input.positionInLightSpace.y * 0.5f + 0.5f);
+    float4 lightSpacePos = input.positionInLightSpace;
+    lightSpacePos.xyz /= lightSpacePos.w;
+    float2 shadowTexCoord = float2(lightSpacePos.x * 0.5f + 0.5f, -lightSpacePos.y * 0.5f + 0.5f);
 
     // 3. Calculamos la visibilidad de la luz (el desvanecimiento en los bordes)
     float2 fromCenter = abs(shadowTexCoord - 0.5f) * 2.0f;
@@ -123,7 +154,7 @@ float4 main(PixelInputType input) : SV_TARGET
 
     // 4. Calculamos el factor de sombra (si el pxel est tapado o no)
     float bias = 0.0005f;
-    float shadowFactor = shadowMap.SampleCmpLevelZero(shadowSampler, shadowTexCoord, input.positionInLightSpace.z - bias);
+    float shadowFactor = CalculatePCFShadowFactor(shadowMap, shadowSampler, input.positionInLightSpace, bias);
     
     // 5. COMBINACIN FINAL:
     // El factor de luz final es el producto de la visibilidad Y si est en sombra.
@@ -137,3 +168,4 @@ float4 main(PixelInputType input) : SV_TARGET
     return finalColor;
     //return float4(lightVisibility, lightVisibility, lightVisibility, 1.0f);
 }
+

@@ -49,6 +49,7 @@ struct PSMaterialPropertiesData
     DirectX::SimpleMath::Vector4 materialSpecularColor;
     float specularPower;
     DirectX::SimpleMath::Vector3 _padding_material; // Padding para alinear a 16 bytes
+    DirectX::SimpleMath::Vector4 emissiveColor;
 };
 
 struct CB_VS_Evolving_Data {
@@ -172,7 +173,7 @@ private:
         DirectX::SimpleMath::Vector4 diffuseColor = DirectX::SimpleMath::Vector4(0.8f, 0.8f, 0.8f, 1.0f); // Color por defecto
         DirectX::SimpleMath::Vector4 specularColor = DirectX::SimpleMath::Vector4(0.2f, 0.2f, 0.2f, 1.0f);
         float specularPower = 32.0f;
-        // Podríamos añadir más: ambientColor, emissiveColor, normalMapSRV, etc.
+        DirectX::SimpleMath::Vector4 emissiveColor = DirectX::SimpleMath::Vector4(0, 0, 0, 1);
     };
 
     // Funciones de ayuda para procesar la escena de Assimp (serán privadas)
