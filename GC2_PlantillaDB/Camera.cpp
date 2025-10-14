@@ -13,8 +13,8 @@ Camera::Camera(int screenWidth, int screenHeight)
     m_yaw(0.0f),
     m_pitch(0.0f),
     m_fieldOfView(DirectX::XM_PIDIV4), // 45 grados
-    m_nearPlane(0.1f),
-    m_farPlane(1000.0f)
+    m_nearPlane(1.0f),
+    m_farPlane(5000.0f)
 {
     UpdateProjectionMatrix(screenWidth, screenHeight);
     UpdateViewMatrix(); // Calcula m_forward, m_right, m_up y m_viewMatrix iniciales
@@ -80,27 +80,24 @@ void Camera::Rotate(float yawDelta, float pitchDelta)
 // Actualizar la matriz de vista
 void Camera::UpdateViewMatrix()
 {
+    // 1. Crear la matriz de rotacin a partir de yaw y pitch.
     Matrix rotationMatrix = Matrix::CreateFromYawPitchRoll(m_yaw, m_pitch, 0.0f);
 
-    // Calcular el vector "adelante" de la cámara
+    // 2. An es necesario actualizar los vectores m_forward, m_right, m_up
+    //    porque otras partes del cdigo (como MoveRelative) los usan.
     m_forward = Vector3::TransformNormal(WORLD_FORWARD, rotationMatrix);
-    m_forward.Normalize();
+    m_right = Vector3::TransformNormal(WORLD_RIGHT, rotationMatrix);
+    m_up = Vector3::TransformNormal(WORLD_UP, rotationMatrix);
 
-    // Calcular el vector "derecha" de la cámara
-    // Este 'm_right' será horizontal respecto al mundo
-    m_right = WORLD_UP.Cross(m_forward);
-    m_right.Normalize();
+    // 3. Construir la matriz de mundo de la cmara (su posicin y orientacin en el mundo).
+    //    El orden es Rotacin * Traslacin.
+    Matrix translationMatrix = Matrix::CreateTranslation(m_position);
+    Matrix cameraWorldMatrix = rotationMatrix * translationMatrix;
 
-    // Calcular el vector "arriba" local de la cámara
-    // Este 'm_up' se inclinará con el pitch
-    m_up = m_right.Cross(m_forward); // Originalmente m_forward.Cross(m_right); pero para LH, Right x Forward = Up
-    m_up.Normalize();                // Si m_right = WORLD_UP.Cross(m_forward), entonces m_up = m_forward.Cross(m_right) da un vector que mira "hacia arriba" relativo a la inclinación de la cámara.
-
-    // El punto hacia donde la cámara está mirando
-    Vector3 lookAtTarget = m_position + m_forward;
-
-    // Crear la matriz de vista
-    m_viewMatrix = Matrix::CreateLookAt(m_position, lookAtTarget, m_up);
+    // 4. La matriz de vista es la INVERSA de la matriz de mundo de la cmara.
+    //    Esto transforma todo el mundo para que la cmara est en el origen, mirando hacia adelante.
+    //    Este mtodo es el ms estable y directo.
+    m_viewMatrix = cameraWorldMatrix.Invert();
 }
 
 // Actualizar la matriz de proyección

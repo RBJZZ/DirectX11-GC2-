@@ -18,7 +18,7 @@ float Lerp(float a, float b, float t) {
 Terrain::Terrain() :
     m_terrainWidth(0),
     m_terrainHeight(0),
-    m_heightScale(30.0f),
+    m_heightScale(300.0f),
     m_textureTilingFactor(8.0f),
     m_vertexCount(0),
     m_indexCount(0),
@@ -112,13 +112,13 @@ void Terrain::CalculateNormals()
 {
     if (m_vertices.empty() || m_indices.empty()) return;
 
-    // Primero, inicializa todas las normales a (0,1,0) o (0,0,0)
+    // 1. Inicializa todas las normales a cero.
     for (size_t i = 0; i < m_vertices.size(); ++i)
     {
         m_vertices[i].normal = Vector3::Zero;
     }
 
-    // Calcula la normal para cada triángulo y la añade a los vértices que lo componen
+    // 2. Itera sobre cada triángulo para acumular las normales de las caras.
     for (size_t i = 0; i < m_indexCount / 3; ++i)
     {
         unsigned long i0 = m_indices[i * 3 + 0];
@@ -131,29 +131,35 @@ void Terrain::CalculateNormals()
 
         Vector3 edge1 = v1 - v0;
         Vector3 edge2 = v2 - v0;
-        Vector3 faceNormal = edge1.Cross(edge2); // El orden importa para la dirección de la normal
+
+        // --- LA CORRECCIÓN ESTÁ AQUÍ ---
+        // Se invierte el producto cruz para el sistema de mano izquierda de DirectX.
+        Vector3 faceNormal = edge2.Cross(edge1);
 
         Vector3 tempNormal;
 
-        tempNormal = XMLoadFloat3(&m_vertices[i0].normal);
+        // Vértice 0
+        tempNormal = m_vertices[i0].normal;
         tempNormal += faceNormal;
-        XMStoreFloat3(&m_vertices[i0].normal, tempNormal);
+        m_vertices[i0].normal = tempNormal;
 
-        tempNormal = XMLoadFloat3(&m_vertices[i1].normal);
+        // Vértice 1
+        tempNormal = m_vertices[i1].normal;
         tempNormal += faceNormal;
-        XMStoreFloat3(&m_vertices[i1].normal, tempNormal);
+        m_vertices[i1].normal = tempNormal;
 
-        tempNormal = XMLoadFloat3(&m_vertices[i2].normal);
+        // Vértice 2
+        tempNormal = m_vertices[i2].normal;
         tempNormal += faceNormal;
-        XMStoreFloat3(&m_vertices[i2].normal, tempNormal);
+        m_vertices[i2].normal = tempNormal;
     }
 
-    // Normaliza todas las normales de los vértices
+    // 3. Normaliza el resultado para obtener vectores unitarios.
     for (size_t i = 0; i < m_vertices.size(); ++i)
     {
-        Vector3 tempNormal = XMLoadFloat3(&m_vertices[i].normal);
+        Vector3 tempNormal = m_vertices[i].normal;
         tempNormal.Normalize();
-        XMStoreFloat3(&m_vertices[i].normal, tempNormal);
+        m_vertices[i].normal = tempNormal;
     }
     OutputDebugString(L"Normals calculated.\n");
 }
@@ -191,7 +197,7 @@ bool Terrain::InitializeBuffers(ID3D11Device* device)
         }
     }
 
-    // Crear índice
+
     int k = 0;
     for (int j = 0; j < m_terrainHeight - 1; ++j)
     {
@@ -202,12 +208,14 @@ bool Terrain::InitializeBuffers(ID3D11Device* device)
             int bottomLeft = (j + 1) * m_terrainWidth + i;
             int bottomRight = bottomLeft + 1;
 
+            // Triángulo 1
             m_indices[k++] = topLeft;
-            m_indices[k++] = bottomLeft; // Para CCW en LH
             m_indices[k++] = topRight;
+            m_indices[k++] = bottomLeft;
 
+            // Triángulo 2
+            m_indices[k++] = bottomLeft;
             m_indices[k++] = topRight;
-            m_indices[k++] = bottomLeft; // Para CCW en LH
             m_indices[k++] = bottomRight;
         }
     }
@@ -266,6 +274,7 @@ bool Terrain::Initialize(ID3D11Device* device, ID3D11DeviceContext* contextForHe
     if (!LoadTexture(device, textureFilename1, m_textureSRV1)) return false; // Textura base
     if (!LoadTexture(device, textureFilename2, m_textureSRV2)) return false; // Textura baja altitud
     if (!LoadTexture(device, textureFilename3, m_textureSRV3)) return false; // Textura alta altitud
+    if (!LoadTexture(device, L"GameAssets\\Textures\\terrain\\rock.jpg", m_textureSRV_Rock)) return false;
 
     // --- Cargar Shaders del Terreno ---
     ComPtr<ID3DBlob> vsBlob;
@@ -312,9 +321,20 @@ bool Terrain::Initialize(ID3D11Device* device, ID3D11DeviceContext* contextForHe
     hr = device->CreateBuffer(&cbd_vs_terrain, nullptr, m_cbVSTerrainData.ReleaseAndGetAddressOf());
     if (FAILED(hr)) { OutputDebugString(L"ERROR: Failed to create Terrain VS CB.\n"); return false; }
 
+    D3D11_BUFFER_DESC cbd_ps_terrain = {};
+    cbd_ps_terrain.Usage = D3D11_USAGE_DYNAMIC;
+    cbd_ps_terrain.ByteWidth = sizeof(CBTerrainPSMaterialData);
+    cbd_ps_terrain.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbd_ps_terrain.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    hr = device->CreateBuffer(&cbd_ps_terrain, nullptr, m_cbPSTerrainMaterial.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) {
+        OutputDebugString(L"ERROR: Failed to create Terrain PS Material CB.\n");
+        return false;
+    }
+
     D3D11_BUFFER_DESC cbd_shadow_pass = {};
     cbd_shadow_pass.Usage = D3D11_USAGE_DYNAMIC;
-    cbd_shadow_pass.ByteWidth = sizeof(CB_VS_Shadow_Data); // ¡Usa la struct del Modelo!
+    cbd_shadow_pass.ByteWidth = sizeof(CB_VS_Shadow_Data); 
     cbd_shadow_pass.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     cbd_shadow_pass.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     hr = device->CreateBuffer(&cbd_shadow_pass, nullptr, m_cbVS_ShadowPass.ReleaseAndGetAddressOf());
@@ -359,7 +379,8 @@ void Terrain::Render(ID3D11DeviceContext* context,
     CBTerrainVSData* vsDataPtr = (CBTerrainVSData*)mappedResourceVS.pData;
     vsDataPtr->World = m_worldMatrix;
     vsDataPtr->ViewProjection = m_viewMatrix * m_projectionMatrix;
-    vsDataPtr->LightViewProjection = lightViewProjMatrix; // Pasa la matriz de luz
+    vsDataPtr->LightViewProjection = lightViewProjMatrix; 
+    vsDataPtr->WorldInverseTranspose = m_worldMatrix.Invert().Transpose();
     vsDataPtr->maxTerrainHeightLocal = m_heightScale;
     context->Unmap(m_cbVSTerrainData.Get(), 0);
     context->VSSetConstantBuffers(0, 1, m_cbVSTerrainData.GetAddressOf());
@@ -367,11 +388,24 @@ void Terrain::Render(ID3D11DeviceContext* context,
     // Vincular Constant Buffer de Luces (al Pixel Shader)
     context->PSSetConstantBuffers(1, 1, &lightPropertiesCB); // slot b1
 
-    // Vincular Texturas al Pixel Shader
-    ID3D11ShaderResourceView* terrainTextures[] = { m_textureSRV1.Get(), m_textureSRV2.Get(), m_textureSRV3.Get() };
-    context->PSSetShaderResources(0, 3, terrainTextures);
+    D3D11_MAPPED_SUBRESOURCE mappedResourcePS;
+    context->Map(m_cbPSTerrainMaterial.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResourcePS);
+    memcpy(mappedResourcePS.pData, &m_terrainMaterialData, sizeof(CBTerrainPSMaterialData));
+    context->Unmap(m_cbPSTerrainMaterial.Get(), 0);
+    context->PSSetConstantBuffers(2, 1, m_cbPSTerrainMaterial.GetAddressOf()); 
 
-    context->PSSetShaderResources(3, 1, &shadowMapSRV);
+
+    // Vincular Texturas al Pixel Shader
+    ID3D11ShaderResourceView* terrainTextures[] = {
+    m_textureSRV1.Get(),
+    m_textureSRV2.Get(),
+    m_textureSRV3.Get(),
+    m_textureSRV_Rock.Get()
+    };
+
+    context->PSSetShaderResources(0, 4, terrainTextures);
+
+    context->PSSetShaderResources(4, 1, &shadowMapSRV);
     context->PSSetSamplers(1, 1, &shadowSampler);
 
     // Configurar Buffers y Dibujar (como antes)
@@ -384,8 +418,8 @@ void Terrain::Render(ID3D11DeviceContext* context,
     context->DrawIndexed(m_indexCount, 0, 0);
 
     // (Opcional) Desvincular texturas para no afectar otros dibujados
-    ID3D11ShaderResourceView* nullSRVs[3] = { nullptr, nullptr, nullptr };
-    context->PSSetShaderResources(0, 3, nullSRVs);
+    ID3D11ShaderResourceView* nullSRVs[4] = { nullptr, nullptr, nullptr, nullptr };
+    context->PSSetShaderResources(0, 4, nullSRVs);
 }
 
 int Terrain::GetTerrainWidth() const { return m_terrainWidth; }

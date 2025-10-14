@@ -57,7 +57,7 @@ float CalculatePCFShadowFactor(Texture2D shadowTex, SamplerComparisonState shado
 {
     // 1. Proyeccin perspectiva y coordenadas de textura
     lightSpacePos.xyz /= lightSpacePos.w;
-    float2 shadowTexCoord = float2(lightSpacePos.x * 0.5f + 0.5f, -lightSpacePos.y * 0.5f + 0.5f);
+    float2 shadowTexCoord = float2(lightSpacePos.x * 0.5f + 0.5f, lightSpacePos.y * -0.5f + 0.5f);
 
     float shadowFactor = 0.0f;
     float2 texelSize;

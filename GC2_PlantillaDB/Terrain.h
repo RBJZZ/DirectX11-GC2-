@@ -12,6 +12,18 @@
 // Estructura de vértice para el terreno (puedes expandirla después)
 using TerrainVertex = DirectX::VertexPositionNormalTexture;
 
+struct CBTerrainPSMaterialData
+{
+    // Control de Altura
+    float dirtMaxHeight = 0.05f;      
+    float grassMaxHeight = 0.40f;     
+    float blendRange = 0.05f;         
+
+    float rockSlopeThreshold = 0.45f; 
+
+    DirectX::SimpleMath::Vector4 padding;
+};
+
 class Terrain
 {
 public:
@@ -39,7 +51,8 @@ public:
     {
         DirectX::SimpleMath::Matrix World;
         DirectX::SimpleMath::Matrix ViewProjection;
-        DirectX::SimpleMath::Matrix LightViewProjection; // Matriz WVP desde la luz
+        DirectX::SimpleMath::Matrix LightViewProjection;
+        DirectX::SimpleMath::Matrix WorldInverseTranspose;
         float maxTerrainHeightLocal;
         DirectX::SimpleMath::Vector3 padding;
     };
@@ -53,9 +66,9 @@ public:
 
     void UpdateGlobalLighting(
         const DirectX::SimpleMath::Vector3& dirLightDirection,
-        const DirectX::SimpleMath::Vector4& dirLightColor, // Color difuso de la fuente de luz
+        const DirectX::SimpleMath::Vector4& dirLightColor, 
         const DirectX::SimpleMath::Vector4& ambientLightColor,
-        const DirectX::SimpleMath::Vector4& dirLightSpecularColor // Color especular de la fuente de luz
+        const DirectX::SimpleMath::Vector4& dirLightSpecularColor 
     );
 
     bool GetWorldHeightAt(float worldX, float worldZ, float& outHeight) const;
@@ -91,16 +104,20 @@ private:
     // Más texturas para multitextura después:
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_textureSRV2; 
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_textureSRV3;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_textureSRV_Rock;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_cbVSTerrainData;
 
     Microsoft::WRL::ComPtr<ID3D11InputLayout> m_inputLayout;
 
     DirectX::SimpleMath::Matrix m_worldMatrix;
-    DirectX::SimpleMath::Matrix m_viewMatrix;       // Se pasarán desde la cámara
-    DirectX::SimpleMath::Matrix m_projectionMatrix; // Se pasarán desde la cámara
+    DirectX::SimpleMath::Matrix m_viewMatrix;       
+    DirectX::SimpleMath::Matrix m_projectionMatrix; 
 
     Microsoft::WRL::ComPtr<ID3D11VertexShader> m_terrainVS;
     Microsoft::WRL::ComPtr<ID3D11PixelShader>  m_terrainPS;
 
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_cbVS_ShadowPass;
+
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_cbPSTerrainMaterial; 
+    CBTerrainPSMaterialData m_terrainMaterialData;
 };

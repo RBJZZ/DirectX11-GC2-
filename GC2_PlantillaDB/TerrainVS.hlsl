@@ -3,8 +3,8 @@ cbuffer CBTerrainVSData : register(b0)
     matrix World;
     matrix ViewProjection;
     matrix LightViewProjection;
-    float MaxTerrainHeightLocal; // m_heightScale, ya que la altura del vértice es 0-1 * m_heightScale
-    // float3 padding; // No es necesario acceder al padding en el shader
+    matrix WorldInverseTranspose;
+    float MaxTerrainHeightLocal; 
 };
 
 struct VertexInputType
@@ -33,7 +33,7 @@ PixelInputType main(VertexInputType input)
     output.worldPosition = worldPos.xyz;
     output.clipSpacePosition = mul(worldPos, transpose(ViewProjection));
 
-    output.worldNormal = normalize(mul(input.localNormal, (float3x3) transpose(World)));
+    output.worldNormal = normalize(mul(input.localNormal, (float3x3) WorldInverseTranspose));
     output.texCoord = input.texCoord; // Pasa las UVs multiplicadas por m_textureTilingFactor
 
     output.scaledLocalY = input.localPosition.y; // Esta es la altura ya escalada por m_heightScale

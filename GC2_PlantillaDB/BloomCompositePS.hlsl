@@ -28,7 +28,7 @@ float4 main(float4 position : SV_POSITION, float2 texCoord : TEXCOORD0) : SV_TAR
     float3 finalHdrColor = (baseColor.rgb * sceneIntensity) + (bloomColor.rgb * bloomIntensity);
     
     // 3. Tone Mapping: Comprimir el color HDR a un rango visible [0, 1] usando la fórmula ACES
-    //finalHdrColor = finalHdrColor * 0.6f; // Control de Exposición
+    finalHdrColor = finalHdrColor * 0.45f; // Control de Exposición
     float a = 2.51f;
     float b = 0.03f;
     float c = 2.43f;

@@ -26,7 +26,7 @@ Game::Game() noexcept(false) :
     m_wKeyWasPressedInPreviousFrame(false),
     m_drawDebugCollisions(true),
     m_timeOfDay(0.25f),
-    m_dayNightCycleSpeed(0.02f),
+    m_dayNightCycleSpeed(0.008f),
     m_sunPower(0.0f)
 {
 
@@ -187,14 +187,12 @@ void Game::Update(DX::StepTimer const& timer)
         DirectX::SimpleMath::Vector3 currentCamPos = m_camera->GetPosition();
         DirectX::SimpleMath::Vector3 intendedMovementVector = DirectX::SimpleMath::Vector3::Zero;
 
-        // Determinar el vector de movimiento relativo basado en la entrada del teclado
         DirectX::SimpleMath::Vector3 relativeMovement = DirectX::SimpleMath::Vector3::Zero;
-        if (wKeyIsCurrentlyPressed || m_kbState.Up) relativeMovement.z += 1.f;
-        if (m_kbState.S || m_kbState.Down) relativeMovement.z -= 1.f;
+        if (wKeyIsCurrentlyPressed || m_kbState.Up) relativeMovement.z -= 1.f; 
+        if (m_kbState.S || m_kbState.Down) relativeMovement.z += 1.f;     
         if (m_kbState.A || m_kbState.Left) relativeMovement.x -= 1.f;
         if (m_kbState.D || m_kbState.Right) relativeMovement.x += 1.f;
-        // El movimiento Y de la cámara (Space/Ctrl) generalmente no se somete a colisión de la misma manera,
-        // o se maneja por separado (ej. saltar, agacharse). Por ahora lo incluimos.
+
         if (m_kbState.Space) relativeMovement.y += 1.f;
         if (m_kbState.X || m_kbState.LeftControl || m_kbState.RightControl) relativeMovement.y -= 1.f;
 
@@ -269,68 +267,24 @@ void Game::Update(DX::StepTimer const& timer)
         }
 
         // --- Ajuste de Altura del Terreno (después de colisiones con modelos) ---
-        DirectX::SimpleMath::Vector3 finalAttemptCamPos = m_camera->GetPosition(); // Posición después de colisiones con modelos (o no)
+        DirectX::SimpleMath::Vector3 finalAttemptCamPos = m_camera->GetPosition();
         float terrainHeight;
         if (m_terrain && m_terrain->GetWorldHeightAt(finalAttemptCamPos.x, finalAttemptCamPos.z, terrainHeight)) {
-            float cameraHeightAboveTerrain = 2.0f; // Ajusta esta altura de "ojos" o "pies"
-            // Si tu cámara Y se invierte (-Y es arriba), entonces sería terrainHeight - cameraHeightAboveTerrain
-            // Asumiendo +Y es arriba:
+
+            // Esta es la altura de los "ojos" sobre el suelo. Un valor como 2.0f es ms realista.
+            float cameraHeightAboveTerrain = 15.0f;
+
+            // LA LÓGICA CORRECTA: Para estar SOBRE el terreno, SUMAMOS la altura.
             m_camera->SetPosition(DirectX::SimpleMath::Vector3(finalAttemptCamPos.x, terrainHeight + cameraHeightAboveTerrain, finalAttemptCamPos.z));
         }
         else {
-            // Fuera del terreno, podrías mantener la Y o aplicar alguna lógica de caída/límite
+            // Fuera del terreno, podras mantener la Y o aplicar lgica de cada/lmite
         }
 
         m_camera->UpdateViewMatrix(); // Actualizar la matriz de vista UNA VEZ después de todos los ajustes de posición y rotación
     }
 
-    if (m_camera && m_terrain)
-    {
-        float terrainHeight;
-        DirectX::SimpleMath::Vector3 camPos = m_camera->GetPosition();
 
-        if (m_terrain->GetWorldHeightAt(camPos.x, camPos.z, terrainHeight))
-        {
-            float cameraHeightAboveTerrain = -10.0f; // O la altura que desees para el personaje/cámara
-            m_camera->SetPosition(DirectX::SimpleMath::Vector3(camPos.x, terrainHeight + cameraHeightAboveTerrain, camPos.z));
-            m_camera->UpdateViewMatrix(); // Asegúrate de actualizar la matriz de vista después de cambiar la posición
-        }
-        else
-        {
-            // La cámara está fuera de los límites del terreno.
-            // Aquí podrías implementar qué sucede: ¿cae, se detiene en el borde, etc.?
-            // Por ahora, podría no hacer nada o mantener su altura Y anterior.
-            // Ejemplo: podrías hacer que la cámara no baje de una cierta altura mínima:
-            // camPos.y = std::max(camPos.y, someMinimumWorldY);
-            // m_camera->SetPosition(camPos);
-            // m_camera->UpdateViewMatrix();
-        }
-    }
-
-    //if (m_camera && m_lightPropertiesCB) // Solo si la cámara y el CB existen
-    //{
-    //    m_lightData.cameraPositionWorld = m_camera->GetPosition();
-    //    // Ajusta estos valores de luz a tu gusto
-    //    m_lightData.directionalLightVector = DirectX::SimpleMath::Vector3(-0.5f, -0.8f, -0.2f);
-    //    m_lightData.directionalLightVector.Normalize(); // Asegurarse de que esté normalizado
-    //    float sunIntensity = 2.0f;
-    //    m_lightData.directionalLightColor = DirectX::SimpleMath::Vector4(1.0f, 1.0f, 0.98f, 1.0f) * sunIntensity;
-    //    float ambientIntensity = 0.1f;
-    //    m_lightData.ambientLightColor = DirectX::SimpleMath::Vector4(0.25f, 0.61f, 1.0f, 1.0f) * ambientIntensity;
-    //    // Actualizar el constant buffer de luces
-    //    D3D11_MAPPED_SUBRESOURCE mappedResource;
-    //    HRESULT hr = context->Map(m_lightPropertiesCB.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
-    //    if (SUCCEEDED(hr))
-    //    {
-    //        memcpy(mappedResource.pData, &m_lightData, sizeof(PSLightPropertiesData));
-    //        context->Unmap(m_lightPropertiesCB.Get(), 0);
-    //    }
-    //    else
-    //    {
-    //        // Manejar error de mapeo si ocurre
-    //        OutputDebugString(L"Failed to map light properties constant buffer.\n");
-    //    }
-    //}
 
     if (m_camera && m_lightPropertiesCB)
     {
@@ -931,7 +885,7 @@ void Game::CreateDeviceDependentResources()
     int height = outputSize.bottom - outputSize.top;
 
     m_camera = std::make_unique<Camera>(width, height);
-    m_camera->SetPosition(DirectX::SimpleMath::Vector3(11.2f, -13.3f, -72.0f));
+    m_camera->SetPosition(DirectX::SimpleMath::Vector3(11.2f, 5.0f, -72.0f));
     // m_camera->SetRotation(yaw, pitch); // Opcional si quieres una rotación inicial específica
     m_camera->UpdateViewMatrix(); // Asegura que la matriz de vista se calcule inicialmente
     
@@ -1012,10 +966,10 @@ void Game::CreateDeviceDependentResources()
     // 1. Que los archivos existan en "GameAssets/Textures/" en tu proyecto.
     // 2. Que su propiedad "Copiar en el directorio de salida" esté en "Copiar si es posterior".
     if (!m_terrain->Initialize(device, context,
-        L"GameAssets\\Textures\\heightmap.png",  // <--- TU ARCHIVO HEIGHTMAP
-        L"GameAssets\\Textures\\terrain\\tileable-TT7002066-dark.png",
-        L"GameAssets\\Textures\\terrain\\tilable-IMG_0044-grey.png",
-        L"GameAssets\\Textures\\dirt.jpg",
+        L"GameAssets\\Textures\\heightmap1.png",
+        L"GameAssets\\Textures\\dirt.jpg",                       
+        L"GameAssets\\Textures\\terrain\\tilable-IMG_0044-grey.png",  
+        L"GameAssets\\Textures\\terrain\\tilable-IMG_0044-grey1.png",               
         L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\TerrainVS.cso",
         L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\TerrainPS.cso"))
     {
@@ -1034,11 +988,11 @@ void Game::CreateDeviceDependentResources()
         float offsetX = terrainGridActualWidth / 2.0f;
         float offsetZ = terrainGridActualDepth / 2.0f;
 
-        float desiredBaseY = -10.0f; // Ejemplo: El "nivel 0" del terreno estará en Y=-10 del mundo.
+        float desiredBaseY = -20.0f; // Ejemplo: El "nivel 0" del terreno estará en Y=-10 del mundo.
         // AJUSTA ESTE VALOR SEGÚN NECESITES.
 
-        float deseadoAnchoDelTerrenoEnElMundo = terrainGridActualWidth * 2.0f; // Ejemplo: Hacerlo el doble de ancho
-        float deseadoProfundidadDelTerrenoEnElMundo = terrainGridActualDepth * 2.0f; // Ejemplo: Hacerlo el doble de profundo
+        float deseadoAnchoDelTerrenoEnElMundo = terrainGridActualWidth * 5.0f; // Ejemplo: Hacerlo el doble de ancho
+        float deseadoProfundidadDelTerrenoEnElMundo = terrainGridActualDepth * 5.0f; // Ejemplo: Hacerlo el doble de profundo
         float escalaYAdicionalParaElMundo = 1.0f;
 
         DirectX::SimpleMath::Matrix terrainScaleMatrix = DirectX::SimpleMath::Matrix::CreateScale(
@@ -1318,6 +1272,85 @@ void Game::CreateDeviceDependentResources()
     m_rock6->SetScale(1.0f);
     m_rock6->SetRotationEuler(DirectX::XM_PI, 0.0f, 0.0f);
 
+    // Modelo de casa 1
+    m_house1 = std::make_unique<Model>();
+    if (!m_house1->Load(device, context,
+        "GameAssets/models/houses/CASA01.obj"))
+    {
+        throw std::runtime_error("Failed to load m_blacksmith!");
+    }
+
+    if (m_house1)
+    {
+        if (!m_house1->LoadEvolvingShaders(device, L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\EvolvingVS.cso", L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\EvolvingPS.cso"))
+        {
+            throw std::runtime_error("Failed to load debug shaders for m_house1!");
+        }
+    }
+
+    m_house1->SetScale(5.0f);
+    m_house1->SetRotationEuler(DirectX::XM_PI, DirectX::XM_PI, 0.0f);
+
+    //Modelo de casa 2
+
+    m_house2 = std::make_unique<Model>();
+    if (!m_house2->Load(device, context,
+        "GameAssets/models/houses/CASA02.obj"))
+    {
+        throw std::runtime_error("Failed to load m_blacksmith!");
+    }
+
+    if (m_house2)
+    {
+        if (!m_house2->LoadEvolvingShaders(device, L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\EvolvingVS.cso", L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\EvolvingPS.cso"))
+        {
+            throw std::runtime_error("Failed to load debug shaders for m_house2!");
+        }
+    }
+
+    m_house2->SetScale(5.0f);
+    m_house2->SetRotationEuler(DirectX::XM_PI, DirectX::XM_PI, 0.0f);
+
+    //Modelo de casa 3
+	m_house3 = std::make_unique<Model>();
+    if (!m_house3->Load(device, context,
+        "GameAssets/models/houses/CASA03.obj"))
+    {
+        throw std::runtime_error("Failed to load m_house3!");
+    }
+
+    if (m_house3)
+    {
+        if (!m_house3->LoadEvolvingShaders(device, L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\EvolvingVS.cso", L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\EvolvingPS.cso"))
+        {
+            throw std::runtime_error("Failed to load debug shaders for m_house2!");
+        }
+    }
+
+    m_house3->SetScale(5.0f);
+    m_house3->SetRotationEuler(DirectX::XM_PI, -DirectX::XM_PIDIV2, 0.0f);
+
+    //Modelo de casa 4
+    m_house4 = std::make_unique<Model>();
+    if (!m_house4->Load(device, context,
+        "GameAssets/models/houses/CASA04.obj"))
+    {
+        throw std::runtime_error("Failed to load m_house3!");
+    }
+
+    if (m_house4)
+    {
+        if (!m_house4->LoadEvolvingShaders(device, L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\EvolvingVS.cso", L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\EvolvingPS.cso"))
+        {
+            throw std::runtime_error("Failed to load debug shaders for m_house2!");
+        }
+    }
+
+    m_house4->SetScale(5.0f);
+    m_house4->SetRotationEuler(DirectX::XM_PI, -DirectX::XM_PIDIV2, 0.0f);
+    
+
+
     hr = CreateWICTextureFromFile(device, L"GameAssets\\textures\\firefly.png", nullptr, m_fireflyTexture.ReleaseAndGetAddressOf());
     if (FAILED(hr)) throw std::runtime_error("Fallo al cargar la textura de la luciernaga.");
 
@@ -1384,6 +1417,26 @@ void Game::CreateDeviceDependentResources()
         baseTransform = m_blacksmith->GetWorldMatrix();
         // Decide una posición X, Z, Y-fallback y offsetY para el herrero
         AddInstancedObject(m_blacksmith.get(), baseTransform, 215.7f, -177.07f, -9.0f, 0.0f); // offsetY=0 si su origen está bien
+    }
+
+    if (m_house1 && m_terrain) { 
+        baseTransform = m_house1->GetWorldMatrix();
+        AddInstancedObject(m_house1.get(), baseTransform, 188.0f, 100.0f,-9.0f, 0.0f);
+    }
+
+    if (m_house2 && m_terrain) {
+        baseTransform = m_house2->GetWorldMatrix();
+        AddInstancedObject(m_house2.get(), baseTransform, -97.2f, 161.0f, -9.0f, 0.0f);
+    }
+
+    if (m_house3 && m_terrain) {
+        baseTransform = m_house3->GetWorldMatrix();
+        AddInstancedObject(m_house3.get(), baseTransform, -88.2f, -209.0f, -9.0f, 0.0f);
+    }
+
+    if (m_house4 && m_terrain) {
+        baseTransform = m_house4->GetWorldMatrix();
+        AddInstancedObject(m_house4.get(), baseTransform, 243.79f, -32.0f, -9.0f, 0.0f);
     }
 
     if (m_cart && m_terrain) {
@@ -1510,14 +1563,10 @@ void Game::CreateDeviceDependentResources()
     if (FAILED(hr)) throw std::runtime_error("Fallo al crear el sampler de comparación para sombras.");
 
     D3D11_RASTERIZER_DESC rasterDesc = {};
-    rasterDesc.CullMode = D3D11_CULL_BACK;
     rasterDesc.FillMode = D3D11_FILL_SOLID;
     rasterDesc.DepthClipEnable = true;
+    rasterDesc.CullMode = D3D11_CULL_BACK;
 
-    // --- NUEVA CONFIGURACIN DE BIAS ---
-    // Un bias fijo moderado para evitar fugas de luz a gran escala.
-
-    rasterDesc.CullMode = D3D11_CULL_FRONT;
     rasterDesc.DepthBias = 100;  // Un bias constante pequeo para polgonos casi perpendiculares.
     rasterDesc.DepthBiasClamp = 0.0f;
     rasterDesc.SlopeScaledDepthBias = 1.0f;// Aumentamos de 2.0 a 4.0
@@ -1764,9 +1813,12 @@ void Game::RenderShadowPass()
 
     // 2. Calcular matrices de la luz
     Vector3 shadowFocusPoint = m_camera->GetPosition();
-    Vector3 lightPosition = shadowFocusPoint + (m_lightData.directionalLightVector * 200.0f);
+    Vector3 lightPosition = shadowFocusPoint - (m_lightData.directionalLightVector * 400.0f); 
+
     Vector3 lightUp = Vector3::Up;
+
     m_lightViewMatrix = Matrix::CreateLookAt(lightPosition, shadowFocusPoint, lightUp);
+
     m_lightProjectionMatrix = Matrix::CreateOrthographic(500.f, 500.f, 1.0f, 800.0f);
 
     // 3. Dibujar los modelos
@@ -1774,7 +1826,7 @@ void Game::RenderShadowPass()
     {
         if (instance.baseModel)
         {
-            context->RSSetState(m_shadowRasterizerState_CullFront.Get()); 
+            context->RSSetState(m_shadowRasterizerState.Get());
 
             bool usesAlphaClip = (instance.baseModel == m_green_tree1.get() ||
                 instance.baseModel == m_forest_pine1.get() ||
@@ -1798,7 +1850,7 @@ void Game::RenderShadowPass()
     // 4. Dibujar el terreno (slido, no necesita alfa)
     if (m_terrain)
     {
-        context->RSSetState(m_shadowRasterizerState_CullFront.Get());
+        context->RSSetState(m_shadowRasterizerState.Get());
         context->PSSetShader(nullptr, nullptr, 0);
         m_terrain->ShadowDraw(context, m_lightViewMatrix, m_lightProjectionMatrix);
     }
@@ -1873,95 +1925,90 @@ DirectX::SimpleMath::Vector4 LerpColor(const DirectX::SimpleMath::Vector4& a, co
     return DirectX::SimpleMath::Vector4::Lerp(a, b, t);
 }
 
-
 void Game::UpdateDayNightCycle(float elapsedTime)
 {
-    // 1. AVANZAR LA HORA DEL DÍA (Sin cambios)
+    // 1. AVANZAR LA HORA DEL DÍA
     m_timeOfDay += elapsedTime * m_dayNightCycleSpeed;
-    m_timeOfDay = fmodf(m_timeOfDay, 1.0f);
+    m_timeOfDay = fmodf(m_timeOfDay, 1.0f); // Se mantiene entre 0.0 y 1.0
 
-    // --- CÁLCULOS DE DIRECCIÓN (Sin cambios, ya son correctos para tu eje Y) ---
-    const float cycleAngle = m_timeOfDay * 2.0f * DirectX::XM_PI;
-    Vector3 sunDirection = Vector3(-cos(cycleAngle), -sin(cycleAngle), 0.3f);
-    sunDirection.Normalize();
+    // 2. CALCULAR LA TRAYECTORIA CONTINUA DE LA LUZ
+    // La luz sigue un círculo completo. El amanecer ocurre en t=0.25, mediodía en t=0.5, etc.
+    const float cycleAngle = m_timeOfDay * 2.0f * DirectX::XM_PI - DirectX::XM_PIDIV2;
 
-    Vector3 moonDirection = Vector3(0.1f, -0.7f, 0.1f);
-    moonDirection.Normalize();
-    m_sunPower = std::clamp(-sunDirection.y, 0.0f, 1.0f);
-    Vector3 finalLightDirection = Vector3::Lerp(moonDirection, sunDirection, m_sunPower);
+    // La trayectoria forma un arco en el cielo.
+    // Y = altitud, Z = movimiento Este/Oeste, X = inclinación Norte/Sur
+    Vector3 finalLightDirection = Vector3(sin(cycleAngle) * 0.4f, sin(cycleAngle), cos(cycleAngle));
     finalLightDirection.Normalize();
+
+    // Actualizamos la dirección de la luz en los datos que se enviarán al shader.
     m_lightData.directionalLightVector = finalLightDirection;
 
-    // ====================================================================
-    // 6. MEZCLAR COLORES E INTENSIDADES (LÓGICA MEJORADA PARA DRAMATISMO)
-    // ====================================================================
+    // 3. DETERMINAR LA INFLUENCIA DEL SOL BASADO EN SU ALTURA
+    // m_sunPower será 1.0 en el punto más alto del sol y 0.0 cuando esté en el horizonte o por debajo.
+    m_sunPower = std::clamp(finalLightDirection.y, 0.0f, 1.0f);
 
-    // --- NUEVA PALETA DE COLORES ---
-    // Puedes ajustar estos colores para conseguir el look que quieras
-    const Vector4 HORIZON_RED(1.0f, 0.2f, 0.1f, 1.0f);           // Rojo intenso del horizonte
-    const Vector4 GOLDEN_HOUR_ORANGE(1.0f, 0.6f, 0.2f, 1.0f);    // Naranja/dorado cálido
-    const Vector4 MIDDAY_SUN_YELLOW(1.0f, 1.0f, 0.9f, 1.0f);     // Amarillo pálido del mediodía
-    const Vector4 MOON_COLOR(0.4f, 0.5f, 0.7f, 1.0f);
+    // 4. MEZCLAR COLORES E INTENSIDADES
 
-    // Paleta para la luz ambiental
-    const Vector4 SUNSET_AMBIENT_PURPLE(0.3f, 0.15f, 0.35f, 1.0f); // Tinte púrpura para el ambiente
-    const Vector4 DAY_AMBIENT(0.25f, 0.25f, 0.3f, 1.0f);
-    const Vector4 NIGHT_AMBIENT(0.01f, 0.015f, 0.02f, 1.0f);
+    // --- Paleta de colores ---
+    const Vector4 HORIZON_RED(1.0f, 0.2f, 0.1f, 1.0f);
+    const Vector4 GOLDEN_HOUR_ORANGE(1.0f, 0.6f, 0.2f, 1.0f);
+    const Vector4 MIDDAY_SUN_YELLOW(1.0f, 1.0f, 0.9f, 1.0f);
+    const Vector4 MOON_COLOR(0.5f, 0.6f, 0.8f, 1.0f); // Luna un poco más brillante y azulada
 
-    // Intensidades
-    const float SUN_INTENSITY = 1.9f; // Ligeramente más intenso para potenciar los colores
-    const float MOON_INTENSITY = 0.20f;
+    const Vector4 SUNSET_AMBIENT_PURPLE(0.4f, 0.25f, 0.45f, 1.0f);
+    const Vector4 DAY_AMBIENT(0.35f, 0.35f, 0.4f, 1.0f);
+    const Vector4 NIGHT_AMBIENT(0.02f, 0.025f, 0.04f, 1.0f);
 
-    // Variables que calcularemos en las fases
+    // --- Intensidades ---
+    const float SUN_INTENSITY = 1.9f;
+    const float MOON_INTENSITY = 0.15f;
+    const float AMBIENT_DAY_INTENSITY = 1.0f;
+    const float AMBIENT_NIGHT_INTENSITY = 0.12f;
+
+    // --- Lógica de Transición de Color del Sol (solo cuando está visible) ---
     Vector4 currentSunColor;
     Vector4 currentAmbientColor;
+    const float goldenHourThreshold = 0.3f;
 
-    // --- LÓGICA DE FASES BASADA EN sunPower ---
-    // sunPower: 0.0 = horizonte, 1.0 = cénit
-
-    // FASE 1: Del crepúsculo al rojo del horizonte (sunPower entre 0.0 y 0.15)
-    if (m_sunPower < 0.15f)
+    if (m_sunPower < goldenHourThreshold)
     {
-        // Normalizamos sunPower para que vaya de 0 a 1 dentro de este pequeño rango
-        float t = m_sunPower / 0.15f;
-        currentSunColor = LerpColor(HORIZON_RED, GOLDEN_HOUR_ORANGE, t);
-        currentAmbientColor = LerpColor(SUNSET_AMBIENT_PURPLE, DAY_AMBIENT, t);
+        float t = m_sunPower / goldenHourThreshold;
+        currentSunColor = Vector4::Lerp(HORIZON_RED, GOLDEN_HOUR_ORANGE, t);
+        currentAmbientColor = Vector4::Lerp(SUNSET_AMBIENT_PURPLE, DAY_AMBIENT, t);
     }
-    // FASE 2: De la hora dorada al día normal (sunPower entre 0.15 y 0.5)
-    else if (m_sunPower < 0.5f)
-    {
-        // Normalizamos sunPower para este rango
-        float t = (m_sunPower - 0.15f) / (0.5f - 0.15f);
-        currentSunColor = LerpColor(GOLDEN_HOUR_ORANGE, MIDDAY_SUN_YELLOW, t);
-        // La luz ambiental ya ha transicionado a la normal del día
-        currentAmbientColor = DAY_AMBIENT;
-    }
-    // FASE 3: Día pleno (sunPower > 0.5)
     else
     {
-        currentSunColor = MIDDAY_SUN_YELLOW;
+        float t = (m_sunPower - goldenHourThreshold) / (1.0f - goldenHourThreshold);
+        currentSunColor = Vector4::Lerp(GOLDEN_HOUR_ORANGE, MIDDAY_SUN_YELLOW, t);
         currentAmbientColor = DAY_AMBIENT;
     }
 
-    // --- APLICAR LOS COLORES CALCULADOS ---
-    Vector4 sunContribution = currentSunColor * SUN_INTENSITY * m_sunPower;
-    Vector4 moonContribution = MOON_COLOR * MOON_INTENSITY * (1.0f - m_sunPower);
-    m_lightData.directionalLightColor = sunContribution + moonContribution;
+    // 5. COMBINACIÓN FINAL (LA CLAVE DE LA SUAVIDAD)
+    // Usamos m_sunPower para mezclar suavemente entre las propiedades del sol y la luna.
+    // Cuando m_sunPower es 0 (noche), solo la contribución de la luna es visible.
+    // Cuando m_sunPower es 1 (mediodía), solo la contribución del sol es visible.
 
-    // La luz ambiental es una mezcla entre la nocturna y la diurna/atardecer calculada
-    m_lightData.ambientLightColor = LerpColor(NIGHT_AMBIENT, currentAmbientColor, m_sunPower);
+    // Luz Direccional: Mezcla entre el color del sol calculado y el color de la luna.
+    Vector4 sunContribution = currentSunColor * SUN_INTENSITY;
+    Vector4 moonContribution = MOON_COLOR * MOON_INTENSITY;
+    m_lightData.directionalLightColor = Vector4::Lerp(moonContribution, sunContribution, m_sunPower);
 
-    // ====================================================================
-    // 7. ACTUALIZAR SKYDOME (Sin cambios)
-    // ====================================================================
+    // Luz Ambiental: Mezcla entre el ambiente de noche y el ambiente de día.
+    Vector4 dayAmbientFinal = currentAmbientColor * AMBIENT_DAY_INTENSITY;
+    Vector4 nightAmbientFinal = NIGHT_AMBIENT * AMBIENT_NIGHT_INTENSITY;
+    m_lightData.ambientLightColor = Vector4::Lerp(nightAmbientFinal, dayAmbientFinal, m_sunPower);
+
+    // 6. ACTUALIZAR SKYDOME
     if (m_skyEffect)
     {
         Vector3 skyTintColor(m_lightData.ambientLightColor);
-        float skyBrightnessFactor = m_sunPower * 1.5f;
+        float skyBrightnessFactor = m_sunPower * 1.8f;
         skyTintColor *= (1.0f + skyBrightnessFactor);
+
         skyTintColor.x = std::max(skyTintColor.x, 0.01f);
         skyTintColor.y = std::max(skyTintColor.y, 0.015f);
         skyTintColor.z = std::max(skyTintColor.z, 0.025f);
+
         m_skyEffect->SetDiffuseColor(skyTintColor);
     }
 }

@@ -245,20 +245,31 @@ bool Model::MeshPart::InitializeBuffers(ID3D11Device* device, const std::vector<
 
 void Model::ProcessNode(ID3D11Device* device, ID3D11DeviceContext* context, aiNode* node, const aiScene* scene, const Matrix& parentTransform)
 {
-    // Obtener la transformación local del nodo y combinarla con la de su padre
+    Matrix finalParentTransform = parentTransform;
+
+    // SOLO si el nodo es el ROOT NODE (el primero), aplicamos la correccin de ejes.
+    if (node == scene->mRootNode)
+    {
+        // Esta matriz rota -90 grados en el eje X. Convierte de Z-up a Y-up.
+        Matrix axisCorrectionMatrix = Matrix::CreateRotationX(DirectX::XM_PI);
+        finalParentTransform = axisCorrectionMatrix * parentTransform;
+    }
+
+    // Obtener la transformacin local del nodo y combinarla con la de su padre (ya corregida si era el root)
     Matrix localNodeTransform = ConvertAssimpMatrix(node->mTransformation);
-    Matrix currentFullTransform = localNodeTransform * parentTransform;
+    Matrix currentFullTransform = localNodeTransform * finalParentTransform;
 
     // Procesar todas las mallas asociadas con este nodo
     for (UINT i = 0; i < node->mNumMeshes; ++i)
     {
-        aiMesh* mesh = scene->mMeshes[node->mMeshes[i]]; // El nodo solo contiene índices a las mallas en la escena global
+        aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
         ProcessMesh(device, context, mesh, scene, currentFullTransform);
     }
 
     // Procesar recursivamente todos los hijos de este nodo
     for (UINT i = 0; i < node->mNumChildren; ++i)
     {
+        // Los hijos recibirn la 'currentFullTransform' que ya incluye la correccin si era necesaria.
         ProcessNode(device, context, node->mChildren[i], scene, currentFullTransform);
     }
 }

@@ -208,6 +208,10 @@ private:
     std::unique_ptr<Model> m_rock4;
     std::unique_ptr<Model> m_rock5;
     std::unique_ptr<Model> m_rock6;
+	std::unique_ptr<Model> m_house1; //HALL
+	std::unique_ptr<Model> m_house2; //CASA PEQUEÑA
+	std::unique_ptr<Model> m_house3; //CASA GRANDE
+	std::unique_ptr<Model> m_house4; //CASA MEDIANA
 
     // Collisions
     std::unique_ptr<DirectX::GeometricPrimitive> m_debugBoxDrawer;
@@ -246,7 +250,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11VertexShader> m_shadowVertexShader_AlphaClip; 
     Microsoft::WRL::ComPtr<ID3D11PixelShader>  m_shadowPixelShader_AlphaClip;
 
-    static const int SHADOW_MAP_SIZE = 4096;
+    static const int SHADOW_MAP_SIZE = 2048;
 
     // Minimap Resources
     Microsoft::WRL::ComPtr<ID3D11Texture2D>           m_minimapTexture;
@@ -282,10 +286,10 @@ private:
 
     struct CB_BloomParameters
     {
-        float bloomThreshold = 0.9f;
-        float bloomIntensity = 1.8f;
-        float sceneIntensity = 0.8f;
-        float saturation = 1.2f;
+        float bloomThreshold = 0.5f;
+        float bloomIntensity = 2.8f;
+        float sceneIntensity = 1.0f;
+        float saturation = 1.4f;
     };
 
     CB_BloomParameters m_bloomParamsData;
