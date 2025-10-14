@@ -195,23 +195,24 @@ private:
     std::unique_ptr<Terrain> m_terrain;
 
     // Models
-    std::unique_ptr<Model> m_blacksmith;
-    std::unique_ptr<Model> m_green_tree1;
+    std::unique_ptr<Model> m_blacksmith; //HERRERIA
+    std::unique_ptr<Model> m_green_tree1; //ARBOL ESTANDAR
     std::unique_ptr<Model> m_forest_pine1;
     std::unique_ptr<Model> m_forest_pine2;
-    std::unique_ptr<Model> m_forest_pine3;
-    std::unique_ptr<Model> m_cart;
-    std::unique_ptr<Model> m_windmill;
+    std::unique_ptr<Model> m_forest_pine3; //PINO
+    std::unique_ptr<Model> m_cart; //CARRITO
+    std::unique_ptr<Model> m_windmill; //MOLINO
     std::unique_ptr<Model> m_rock1;
     std::unique_ptr<Model> m_rock2;
     std::unique_ptr<Model> m_rock3;
     std::unique_ptr<Model> m_rock4;
     std::unique_ptr<Model> m_rock5;
-    std::unique_ptr<Model> m_rock6;
+    std::unique_ptr<Model> m_rock6;  //ROCAS
 	std::unique_ptr<Model> m_house1; //HALL
 	std::unique_ptr<Model> m_house2; //CASA PEQUEÑA
 	std::unique_ptr<Model> m_house3; //CASA GRANDE
 	std::unique_ptr<Model> m_house4; //CASA MEDIANA
+	std::unique_ptr<Model> m_knight; //CABALLERO
 
     // Collisions
     std::unique_ptr<DirectX::GeometricPrimitive> m_debugBoxDrawer;

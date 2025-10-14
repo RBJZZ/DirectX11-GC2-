@@ -26,7 +26,7 @@ Game::Game() noexcept(false) :
     m_wKeyWasPressedInPreviousFrame(false),
     m_drawDebugCollisions(true),
     m_timeOfDay(0.25f),
-    m_dayNightCycleSpeed(0.008f),
+    m_dayNightCycleSpeed(0.003f),
     m_sunPower(0.0f)
 {
 
@@ -1277,7 +1277,7 @@ void Game::CreateDeviceDependentResources()
     if (!m_house1->Load(device, context,
         "GameAssets/models/houses/CASA01.obj"))
     {
-        throw std::runtime_error("Failed to load m_blacksmith!");
+        throw std::runtime_error("Failed to load m_house1!");
     }
 
     if (m_house1)
@@ -1297,7 +1297,7 @@ void Game::CreateDeviceDependentResources()
     if (!m_house2->Load(device, context,
         "GameAssets/models/houses/CASA02.obj"))
     {
-        throw std::runtime_error("Failed to load m_blacksmith!");
+        throw std::runtime_error("Failed to load m_house2!");
     }
 
     if (m_house2)
@@ -1323,7 +1323,7 @@ void Game::CreateDeviceDependentResources()
     {
         if (!m_house3->LoadEvolvingShaders(device, L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\EvolvingVS.cso", L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\EvolvingPS.cso"))
         {
-            throw std::runtime_error("Failed to load debug shaders for m_house2!");
+            throw std::runtime_error("Failed to load debug shaders for m_house3!");
         }
     }
 
@@ -1335,21 +1335,36 @@ void Game::CreateDeviceDependentResources()
     if (!m_house4->Load(device, context,
         "GameAssets/models/houses/CASA04.obj"))
     {
-        throw std::runtime_error("Failed to load m_house3!");
+        throw std::runtime_error("Failed to load m_house4!");
     }
 
     if (m_house4)
     {
         if (!m_house4->LoadEvolvingShaders(device, L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\EvolvingVS.cso", L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\EvolvingPS.cso"))
         {
-            throw std::runtime_error("Failed to load debug shaders for m_house2!");
+            throw std::runtime_error("Failed to load debug shaders for m_house4!");
         }
     }
 
     m_house4->SetScale(5.0f);
     m_house4->SetRotationEuler(DirectX::XM_PI, -DirectX::XM_PIDIV2, 0.0f);
     
-
+    m_knight = std::make_unique<Model>();
+    if (!m_knight->Load(device, context,
+        "GameAssets/models/knight/knight.obj"))
+    {
+        throw std::runtime_error("Failed to load m_knight!");
+    }
+    if (m_knight)
+    {
+        if (!m_knight->LoadEvolvingShaders(device, L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\EvolvingVS.cso", L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\EvolvingPS.cso"))
+        {
+            throw std::runtime_error("Failed to load debug shaders for m_knight!");
+        }
+    }
+    m_knight->SetScale(0.1f);
+    m_knight->SetRotationEuler(DirectX::XM_PI, DirectX::XM_PI, 0.0f);
+    
 
     hr = CreateWICTextureFromFile(device, L"GameAssets\\textures\\firefly.png", nullptr, m_fireflyTexture.ReleaseAndGetAddressOf());
     if (FAILED(hr)) throw std::runtime_error("Fallo al cargar la textura de la luciernaga.");
@@ -1439,6 +1454,11 @@ void Game::CreateDeviceDependentResources()
         AddInstancedObject(m_house4.get(), baseTransform, 243.79f, -32.0f, -9.0f, 0.0f);
     }
 
+    if (m_knight && m_terrain) {
+        baseTransform = m_knight->GetWorldMatrix();
+        AddInstancedObject(m_knight.get(), baseTransform, 6.15f, -256.0f, -4.0f, 0.0f);
+    }
+
     if (m_cart && m_terrain) {
         baseTransform = m_cart->GetWorldMatrix();
         AddInstancedObject(m_cart.get(), baseTransform, 154.8f, -137.55f, -4.7f, 0.0f); // offsetY=0 ejemplo
@@ -1453,7 +1473,6 @@ void Game::CreateDeviceDependentResources()
     // Para m_rock1 (y las demás rocas si las vas a instanciar o colocar individualmente)
     if (m_rock1 && m_terrain) {
         baseTransform = m_rock1->GetWorldMatrix();
-        // La posición original de m_rock1 era (-79.10f, 5.0f, -118.56f) en Render
         AddInstancedObject(m_rock1.get(), baseTransform, -79.10f, -118.56f, 5.0f, offsetY_rock);
     }
 
@@ -1504,7 +1523,7 @@ void Game::CreateDeviceDependentResources()
 
     hr = device->CreateInputLayout(
         fireflyLayoutDesc,
-        ARRAYSIZE(fireflyLayoutDesc), // Usamos ARRAYSIZE para obtener el número de elementos en nuestro array.
+        ARRAYSIZE(fireflyLayoutDesc),
         vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(),
         m_fireflyInputLayout.ReleaseAndGetAddressOf());
 
@@ -1567,7 +1586,7 @@ void Game::CreateDeviceDependentResources()
     rasterDesc.DepthClipEnable = true;
     rasterDesc.CullMode = D3D11_CULL_BACK;
 
-    rasterDesc.DepthBias = 100;  // Un bias constante pequeo para polgonos casi perpendiculares.
+    rasterDesc.DepthBias = 100;  
     rasterDesc.DepthBiasClamp = 0.0f;
     rasterDesc.SlopeScaledDepthBias = 1.0f;// Aumentamos de 2.0 a 4.0
     // --- FIN DE LA NUEVA CONFIGURACIN ---
@@ -1576,8 +1595,6 @@ void Game::CreateDeviceDependentResources()
     if (FAILED(hr)) throw std::runtime_error("Fallo al crear el estado de rasterizador para sombras.");
 
 
-
-    // ¡ASEGÚRATE DE QUE LA RUTA A TU SHADER SEA CORRECTA!
     hr = D3DReadFileToBlob(L"C:\\Users\\rebeq\\source\\repos\\GC2_PlantillaDB\\x64\\Debug\\ShadowVS.cso", vsBlob.GetAddressOf());
     if (FAILED(hr))
     {
@@ -1762,13 +1779,13 @@ void Game::OnDeviceRestored()
 
 void Game::AddInstancedObject(
     Model* modelPtr,
-    const DirectX::SimpleMath::Matrix& baseTransform, // Matriz base del modelo (escala/rotación)
+    const DirectX::SimpleMath::Matrix& baseTransform, 
     float instanceX,
     float instanceZ,
     float fallbackY,
     float modelSpecificOffsetY)
 {
-    if (!modelPtr || !m_terrain) { // No hacer nada si no hay modelo o terreno
+    if (!modelPtr || !m_terrain) { 
         return;
     }
 
@@ -1782,7 +1799,6 @@ void Game::AddInstancedObject(
         finalInstanceY = fallbackY;
     }
 
-    // Construir la matriz de mundo para ESTA instancia específica
     DirectX::SimpleMath::Matrix instanceWorldMatrix = baseTransform; // Comienza con escala/rotación base del modelo
     // Establece la posición de esta instancia
     instanceWorldMatrix.Translation(DirectX::SimpleMath::Vector3(instanceX, finalInstanceY, instanceZ));
@@ -1881,18 +1897,17 @@ void Game::RenderMinimapPass()
 
     // 3. Configurar la "cmara" del minimapa
     Vector3 playerPos = m_camera->GetPosition();
-    Vector3 mapCamPos = Vector3(playerPos.x, playerPos.y - 200.f, playerPos.z);
+    Vector3 mapCamPos = Vector3(playerPos.x, 150.0f, playerPos.z);
     Vector3 mapCamTarget = playerPos;
     Matrix minimapView = Matrix::CreateLookAt(mapCamPos, mapCamTarget, Vector3::Forward);
-    Matrix minimapProj = Matrix::CreateOrthographic(100.f, 100.f, 1.0f, 400.0f);
+    Matrix minimapProj = Matrix::CreateOrthographic(150.f, 150.f, 1.0f, 400.0f);
 
     // 4. Dibujar la escena en el minimapa USANDO LA LUZ DEL MINIMAPA
     if (m_terrain)
     {
         m_terrain->SetViewMatrix(minimapView);
         m_terrain->SetProjectionMatrix(minimapProj);
-      
-        // Le pasamos el sampler real, aunque la textura sea nula.
+
         m_terrain->Render(context, m_minimapLightPropertiesCB.Get(), m_samplerState.Get(), playerPos, m_lightViewMatrix * m_lightProjectionMatrix, nullptr, m_shadowSamplerState.Get());
     }
 
