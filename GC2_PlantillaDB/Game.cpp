@@ -26,7 +26,7 @@ Game::Game() noexcept(false) :
     m_wKeyWasPressedInPreviousFrame(false),
     m_drawDebugCollisions(true),
     m_timeOfDay(0.25f),
-    m_dayNightCycleSpeed(0.003f),
+    m_dayNightCycleSpeed(0.009f),
     m_sunPower(0.0f)
 {
 
@@ -85,8 +85,9 @@ void Game::Update(DX::StepTimer const& timer)
     float elapsedTime = float(timer.GetElapsedSeconds());
     auto context = m_deviceResources->GetD3DDeviceContext();
 
-    // TODO: Add your game logic here.
-
+    // -----------------------------------------------------------------------
+    // 0. LÓGICA GENERAL (Input, Ciclo Día/Noche, etc)
+    // -----------------------------------------------------------------------
     UpdateDayNightCycle(elapsedTime);
     UpdateFireflies(elapsedTime);
 
@@ -102,194 +103,179 @@ void Game::Update(DX::StepTimer const& timer)
         m_mouseTracker.Update(m_mouseState);
     }
 
+    if (m_kbState.Escape) ExitGame();
 
-    if (m_kbState.Escape)
-    {
-        ExitGame();
+    // Lógica de Sprint
+    bool wKeyIsCurrentlyPressed = m_kbState.W;
+    if (m_wTapTimer > 0.0f) {
+        m_wTapTimer -= elapsedTime;
+        if (m_wTapTimer <= 0.0f) { m_wTapCount = 0; m_wTapTimer = 0.0f; }
     }
 
-    bool wKeyIsCurrentlyPressed = m_kbState.W;
-
-
-    if (m_wTapTimer > 0.0f)
-    {
-        m_wTapTimer -= elapsedTime;
-        if (m_wTapTimer <= 0.0f)
-        {
+    if (m_kbTracker.pressed.W) {
+        if (m_wTapCount == 1 && m_wTapTimer > 0.0f) {
+            m_isSprinting = true;
             m_wTapCount = 0;
             m_wTapTimer = 0.0f;
         }
-    }
-
-    
-    if (m_kbTracker.pressed.W)
-    {
-        if (m_wTapCount == 1 && m_wTapTimer > 0.0f) 
-        {
-            m_isSprinting = true;
-            m_wTapCount = 0;       
-            m_wTapTimer = 0.0f;
-        }
-        else 
-        {
+        else {
             m_wTapCount = 1;
-            m_wTapTimer = m_doubleTapTimeLimit; 
-           
+            m_wTapTimer = m_doubleTapTimeLimit;
         }
     }
 
-    
-    if (!wKeyIsCurrentlyPressed) 
-    {
+    if (!wKeyIsCurrentlyPressed || (m_kbState.A || m_kbState.S || m_kbState.D)) {
         m_isSprinting = false;
-
     }
 
-    if (m_isSprinting && (m_kbState.A || m_kbState.S || m_kbState.D)) {
-        m_isSprinting = false;
-        m_wTapCount = 0;
-        m_wTapTimer = 0.0f;
+    // Cambio de cámara
+    if (m_kbTracker.pressed.C) {
+        m_isThirdPerson = !m_isThirdPerson;
     }
 
-    if (m_isSprinting && wKeyIsCurrentlyPressed)
-    {
-        m_currentSpeed = m_sprintSpeed;
-    }
-    else
-    {
-        m_isSprinting = false;
-        m_currentSpeed = m_normalSpeed;
-    }
+    m_currentSpeed = (m_isSprinting && wKeyIsCurrentlyPressed) ? m_sprintSpeed : m_normalSpeed;
 
-    if (m_camera)
-    {
-        float rotateSpeed = 2.0f;
-        float yawDelta = 0.0f;
-        float pitchDelta = 0.0f;
 
-        // Procesar entrada del ratón para rotación
-        if (m_mouse) {
-            if (m_mouseState.leftButton) {
-                m_mouse->SetMode(DirectX::Mouse::MODE_RELATIVE);
-            }
-            if (m_mouse->GetState().positionMode == DirectX::Mouse::MODE_RELATIVE) {
-                yawDelta = -static_cast<float>(m_mouseState.x) * 0.001f;
-                pitchDelta = -static_cast<float>(m_mouseState.y) * 0.001f;
-            }
-        }
+    // -----------------------------------------------------------------------
+    // 1. MOVIMIENTO DEL JUGADOR (WASD relativo a la cámara)
+    // -----------------------------------------------------------------------
 
-        // Aplicar rotación a la cámara INMEDIATAMENTE
-        if (yawDelta != 0.0f || pitchDelta != 0.0f) {
+    // A. Rotación de la cámara con Mouse
+    if (m_camera && m_mouse) {
+        if (m_mouseState.leftButton || m_mouseState.rightButton) {
+            m_mouse->SetMode(DirectX::Mouse::MODE_RELATIVE);
+            float rotateSpeed = 2.0f;
+            float yawDelta = -static_cast<float>(m_mouseState.x) * 0.001f;
+            float pitchDelta = -static_cast<float>(m_mouseState.y) * 0.001f;
             m_camera->Rotate(yawDelta * rotateSpeed, pitchDelta * rotateSpeed);
         }
-
-        // Obtener la posición actual ANTES de calcular el movimiento
-        DirectX::SimpleMath::Vector3 currentCamPos = m_camera->GetPosition();
-        DirectX::SimpleMath::Vector3 intendedMovementVector = DirectX::SimpleMath::Vector3::Zero;
-
-        DirectX::SimpleMath::Vector3 relativeMovement = DirectX::SimpleMath::Vector3::Zero;
-        if (wKeyIsCurrentlyPressed || m_kbState.Up) relativeMovement.z -= 1.f; 
-        if (m_kbState.S || m_kbState.Down) relativeMovement.z += 1.f;     
-        if (m_kbState.A || m_kbState.Left) relativeMovement.x -= 1.f;
-        if (m_kbState.D || m_kbState.Right) relativeMovement.x += 1.f;
-
-        if (m_kbState.Space) relativeMovement.y += 1.f;
-        if (m_kbState.X || m_kbState.LeftControl || m_kbState.RightControl) relativeMovement.y -= 1.f;
-
-        // Calcular el desplazamiento deseado para este frame
-        if (relativeMovement.LengthSquared() > 0.0f) {
-            // Transformar el movimiento relativo a coordenadas del mundo basado en la orientación actual de la cámara
-            DirectX::SimpleMath::Matrix camRotationMatrix = DirectX::SimpleMath:: Matrix::CreateFromQuaternion(m_camera->GetRotation());
-            intendedMovementVector = DirectX::SimpleMath::Vector3::TransformNormal(relativeMovement, camRotationMatrix);
-            intendedMovementVector.Normalize(); // Asegurar que sea una dirección
-            intendedMovementVector *= m_currentSpeed * elapsedTime; // Aplicar velocidad y tiempo
+        else {
+            m_mouse->SetMode(DirectX::Mouse::MODE_ABSOLUTE);
         }
+    }
 
-        DirectX::SimpleMath::Vector3 nextCamPos = currentCamPos + intendedMovementVector;
+    // B. Desplazamiento
+    DirectX::SimpleMath::Vector3 moveDir = DirectX::SimpleMath::Vector3::Zero;
+    if (m_kbState.W) moveDir.z += 1.f; // Adelante
+    if (m_kbState.S) moveDir.z -= 1.f; // Atrás
+    if (m_kbState.A) moveDir.x += 1.f; // Izquierda
+    if (m_kbState.D) moveDir.x -= 1.f; // Derecha
 
-        // --- Detección y Respuesta a la Colisión con Modelos ---
-        bool collisionHappened = false; // Inicializar antes de las comprobaciones
+    if (moveDir.LengthSquared() > 0) {
+        moveDir.Normalize();
+        // Rotamos el vector de movimiento según hacia donde mira la cámara (Solo YAW)
+        Matrix camYRotation = Matrix::CreateRotationY(m_camera->GetYaw());
+        Vector3 worldMove = Vector3::Transform(moveDir, camYRotation);
 
-        if (intendedMovementVector.LengthSquared() > 0.0f) // Solo checar colisión si hay intento de movimiento
+        m_playerPos += worldMove * m_currentSpeed * elapsedTime;
+        m_walkBobTimer += elapsedTime * 10.0f;
+    }
+    else {
+        m_walkBobTimer = 0.0f;
+    }
+
+    // -----------------------------------------------------------------------
+    // 2. FÍSICA DEL JUGADOR (Pegar al suelo)
+    // -----------------------------------------------------------------------
+    if (m_terrain) {
+        float terrainHeight = 0.0f;
+        if (m_terrain->GetWorldHeightAt(m_playerPos.x, m_playerPos.z, terrainHeight)) {
+            m_playerPos.y = terrainHeight;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 3. ACTUALIZAR MODELO (Posición y Rotación)
+    // -----------------------------------------------------------------------
+    if (m_knight)
+    {
+        // Sincronizar posición
+        m_knight->SetPosition(m_playerPos);
+
+        // Sincronizar rotación: Mira hacia donde mira la cámara (Yaw).
+        // NOTA: Ya no sumamos PI. Queremos que mire al horizonte para verle la espalda.
+        m_knight->SetRotationEuler(0.0f, m_camera->GetYaw(), 0.0f);
+
+        // Asegurar escala correcta (Según confirmaste, 0.1 funciona bien)
+        m_knight->SetScale(0.1f);
+    }
+
+    // -----------------------------------------------------------------------
+    // 4. LÓGICA DE CÁMARA (Orbital / Primera Persona)
+    // -----------------------------------------------------------------------
+    if (m_camera)
+    {
+        if (m_isThirdPerson)
         {
-            float cameraHeight = 1.8f;
-            float cameraRadius = 0.4f;
-            DirectX::BoundingBox cameraFutureBox(nextCamPos, DirectX::SimpleMath::Vector3(cameraRadius, cameraHeight / 2.0f, cameraRadius));
+            // --- CALIBRACIÓN CORREGIDA PARA TU ESCALA ---
 
-            if (m_drawDebugCollisions) {
-                m_cameraBoxToDraw = cameraFutureBox;
-                m_modelPartBoxesToDraw.clear();
-            }
+            // 1. ALTURA: Si 8.0 era la cintura, la cabeza está cerca de 15.0 o 16.0.
+            float ALTURA_PIVOTE = 24.0f;
 
-            for (const auto& instance : m_worldInstances)
+            // 2. DISTANCIA: Para encuadrar a un personaje de 16 unidades de alto,
+            // necesitamos alejarnos al menos 35 o 40 unidades.
+            float DISTANCIA = 40.0f;
+            // --------------------------------------------
+
+            // A. Definir Pivote
+            Vector3 targetPivot = m_playerPos;
+            targetPivot.y += ALTURA_PIVOTE;
+
+            // B. Calcular posición ("Palo Selfie")
+            Matrix rotationMatrix = Matrix::CreateFromYawPitchRoll(m_camera->GetYaw(), m_camera->GetPitch(), 0.0f);
+
+            // Vector Hacia Atrás
+            Vector3 offset = Vector3::Transform(Vector3(0, 0, 1), rotationMatrix);
+            offset *= DISTANCIA;
+
+            Vector3 finalCamPos = targetPivot + offset;
+
+            // C. Corrección Terreno
+            if (m_terrain)
             {
-                if (!instance.baseModel) continue;
-
-                DirectX::BoundingSphere localSphere = instance.baseModel->GetOverallLocalBoundingSphere();
-                DirectX::BoundingSphere instanceWorldSphere;
-
-                localSphere.Transform(instanceWorldSphere, instance.worldTransform);
-
-                // Opcional: si quieres seguir viendo las esferas de debug que se calculan aquí en Update
-                // if (m_drawDebugCollisions) {
-                //     m_modelSpheresToDraw.push_back(instanceWorldSphere); // PERO RECUERDA que m_modelSpheresToDraw se limpia y llena en Render
-                // }                                                     // para el dibujado final. Esto sería para un debug más inmediato en Update.
-
-                if (cameraFutureBox.Intersects(instanceWorldSphere))
+                float cameraGroundY = 0.0f;
+                if (m_terrain->GetWorldHeightAt(finalCamPos.x, finalCamPos.z, cameraGroundY))
                 {
-
-                    if (instance.baseModel->CheckCollisionAgainstParts(cameraFutureBox,
-                        instance.worldTransform, 
-                        m_modelPartBoxesToDraw,
-                        m_drawDebugCollisions))
-                    {
-                        collisionHappened = true;
-                        wchar_t msg[128];
-                        swprintf_s(msg, L"COLISIÓN DETECTADA (Update) con instancia de modelo %p!\n", instance.baseModel);
-                        OutputDebugString(msg);
-                        break;
+                    if (finalCamPos.y < cameraGroundY + 1.0f) { // Subimos el margen a 1.0f
+                        finalCamPos.y = cameraGroundY + 1.0f;
                     }
                 }
             }
-            // --- FIN DEL NUEVO BUCLE DE COLISIÓN ---
 
-            // El antiguo bucle "for (Model* model : collidableModels)" DEBE SER ELIMINADO
-            // o modificado para que solo maneje objetos que NO estén en m_worldInstances.
-            // Si todos tus objetos colisionables están ahora en m_worldInstances, puedes eliminar ese viejo bucle.
+            m_camera->SetPosition(finalCamPos);
+        }
+        else
+        {
+            // --- CALIBRACIÓN PRIMERA PERSONA ---
+
+            Vector3 eyePos = m_playerPos;
+
+            // 1. ALTURA DE OJOS:
+            // Si el pecho está en 24.0f, los ojos están un poco más arriba.
+            eyePos.y += 26.0f;
+
+            // 2. ADELANTAR CÁMARA:
+            // Necesitamos salir del casco. Como el modelo es grande, 
+            // empujamos la cámara 3 o 4 unidades hacia adelante.
+            Matrix rotY = Matrix::CreateRotationY(m_camera->GetYaw());
+
+            // Nota: Dependiendo de tu sistema de coordenadas, Forward puede ser +Z o -Z.
+            // Vector3::Forward suele ser (0,0,1) o (0,0,-1).
+            // Si ves hacia atrás, cambia el signo.
+            Vector3 forwardOffset = Vector3::Transform(Vector3::Forward, rotY) * 4.0f;
+
+            m_camera->SetPosition(eyePos + forwardOffset);
         }
 
-        // Aplicar movimiento final o revertir
-        if (collisionHappened) {
-            // No mover la cámara, se queda en currentCamPos
-        }
-        else {
-            m_camera->SetPosition(nextCamPos);
-        }
-
-        // --- Ajuste de Altura del Terreno (después de colisiones con modelos) ---
-        DirectX::SimpleMath::Vector3 finalAttemptCamPos = m_camera->GetPosition();
-        float terrainHeight;
-        if (m_terrain && m_terrain->GetWorldHeightAt(finalAttemptCamPos.x, finalAttemptCamPos.z, terrainHeight)) {
-
-            // Esta es la altura de los "ojos" sobre el suelo. Un valor como 2.0f es ms realista.
-            float cameraHeightAboveTerrain = 15.0f;
-
-            // LA LÓGICA CORRECTA: Para estar SOBRE el terreno, SUMAMOS la altura.
-            m_camera->SetPosition(DirectX::SimpleMath::Vector3(finalAttemptCamPos.x, terrainHeight + cameraHeightAboveTerrain, finalAttemptCamPos.z));
-        }
-        else {
-            // Fuera del terreno, podras mantener la Y o aplicar lgica de cada/lmite
-        }
-
-        m_camera->UpdateViewMatrix(); // Actualizar la matriz de vista UNA VEZ después de todos los ajustes de posición y rotación
+        m_camera->UpdateViewMatrix();
     }
 
-
-
+    // -----------------------------------------------------------------------
+    // 5. ACTUALIZAR LUCES Y EFECTOS
+    // -----------------------------------------------------------------------
     if (m_camera && m_lightPropertiesCB)
     {
         m_lightData.cameraPositionWorld = m_camera->GetPosition();
-        // Actualizar el constant buffer de luces
         D3D11_MAPPED_SUBRESOURCE mappedResource;
         HRESULT hr = context->Map(m_lightPropertiesCB.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
         if (SUCCEEDED(hr))
@@ -297,26 +283,18 @@ void Game::Update(DX::StepTimer const& timer)
             memcpy(mappedResource.pData, &m_lightData, sizeof(PSLightPropertiesData));
             context->Unmap(m_lightPropertiesCB.Get(), 0);
         }
-        else
-        {
-            OutputDebugString(L"Failed to map light properties constant buffer.\n");
-        }
     }
 
     if (m_terrain) {
-        // El vector de luz en m_lightData (directionalLightVector) es HACIA la luz.
-        // BasicEffect::SetLightDirection también espera un vector HACIA la luz.
         m_terrain->UpdateGlobalLighting(
             m_lightData.directionalLightVector,
             m_lightData.directionalLightColor,
             m_lightData.ambientLightColor,
-            m_lightData.directionalLightColor // O un color blanco/gris si quieres que el brillo especular de la luz sea incoloro
-            // por ejemplo: DirectX::Colors::White * 0.7f
+            m_lightData.directionalLightColor
         );
     }
-
-    elapsedTime;
 }
+
 #pragma endregion
 
 #pragma region Frame Render
@@ -397,7 +375,30 @@ void Game::Render()
             );
         }
     }
-    // Restaurar el estado por defecto después del bucle
+
+
+
+    if (m_knight && m_isThirdPerson)
+    {
+        // La posición se actualiza aquí para interpolación suave (opcional), 
+        // pero la lógica principal está en Update.
+        // Asegúrate de que la Y sea la del suelo.
+        m_knight->SetPosition(m_playerPos);
+
+
+        m_knight->EvolvingDraw(
+            context,
+            viewMatrix,
+            projectionMatrix,
+            m_lightPropertiesCB.Get(),
+            m_samplerState.Get(),
+            m_lightViewMatrix,
+            m_lightProjectionMatrix,
+            m_shadowMapSRV.Get(),
+            m_shadowSamplerState.Get()
+        );
+    }
+
     context->RSSetState(m_states->CullCounterClockwise());
 
     if (m_drawDebugCollisions)
@@ -660,6 +661,44 @@ void Game::Render()
     }
     m_deviceResources->PIXEndEvent();
 
+    if (m_debugSphereDrawer)
+    {
+        m_deviceResources->PIXBeginEvent(L"Debug Player Pos");
+
+        // Dibuja la esfera un poco más arriba (donde debería estar la cabeza)
+        float ALTURA_ESTIMADA_DEBUG = 20.0f;
+
+        Vector3 debugPos = m_playerPos;
+        debugPos.y += ALTURA_ESTIMADA_DEBUG;
+
+        // Dibujamos la esfera escalada según las unidades
+        float escalaEsfera = ALTURA_ESTIMADA_DEBUG * 0.1f; // 10% del tamaño
+        DirectX::SimpleMath::Matrix sphereWorld = DirectX::SimpleMath::Matrix::CreateScale(escalaEsfera) * DirectX::SimpleMath::Matrix::CreateTranslation(debugPos);
+
+        m_debugSphereDrawer->Draw(sphereWorld, viewMatrix, projectionMatrix, DirectX::Colors::Lime);
+
+        m_deviceResources->PIXEndEvent();
+    }
+
+    // PRUEBA 2: FORZAR EL DIBUJADO DEL CABALLERO (SIN IF)
+    if (m_knight)
+    {
+        if (m_isThirdPerson)
+        {
+            m_knight->EvolvingDraw(
+                context,
+                viewMatrix,
+                projectionMatrix,
+                m_lightPropertiesCB.Get(),
+                m_samplerState.Get(),
+                m_lightViewMatrix,
+                m_lightProjectionMatrix,
+                m_shadowMapSRV.Get(),
+                m_shadowSamplerState.Get()
+            );
+        }
+    }
+
 
     m_deviceResources->PIXBeginEvent(L"3. Render UI");
     if (m_spriteBatchUI)
@@ -865,10 +904,8 @@ void Game::CreateDeviceDependentResources()
     // Definimos una iluminacin brillante y uniforme para el minimapa
     // Luz ambiental muy alta para que todo sea visible
     m_minimapLightData.ambientLightColor = DirectX::SimpleMath::Vector4(0.8f, 0.8f, 0.8f, 1.0f);
-    // Una luz direccional suave desde arriba solo para dar un poco de definicin
     m_minimapLightData.directionalLightVector = DirectX::SimpleMath::Vector3(0.0f, -1.0f, 0.0f);
     m_minimapLightData.directionalLightColor = DirectX::SimpleMath::Vector4(0.5f, 0.5f, 0.5f, 1.0f);
-    // La posicin de la cmara no es crtica para esta iluminacin
     m_minimapLightData.cameraPositionWorld = DirectX::SimpleMath::Vector3::Zero;
 
 
@@ -885,8 +922,17 @@ void Game::CreateDeviceDependentResources()
     int height = outputSize.bottom - outputSize.top;
 
     m_camera = std::make_unique<Camera>(width, height);
-    m_camera->SetPosition(DirectX::SimpleMath::Vector3(11.2f, 5.0f, -72.0f));
-    // m_camera->SetRotation(yaw, pitch); // Opcional si quieres una rotación inicial específica
+    //Player spawn point
+    m_playerPos = DirectX::SimpleMath::Vector3(11.2f, 0.0f, -72.0f);
+
+    float distanciaAtras = 8.0f;
+    float alturaArriba = 4.0f;
+    DirectX::SimpleMath::Vector3 offsetInicial(0.0f, alturaArriba, -distanciaAtras);
+
+    m_playerPos = DirectX::SimpleMath::Vector3(11.2f, 0.0f, -72.0f);
+    /*m_camera->SetPosition(m_playerPos + DirectX::SimpleMath::Vector3(0.0f, 5.0f, -10.0f));*/
+
+    /*m_camera->SetRotation(0.0f, 0.0f);*/
     m_camera->UpdateViewMatrix(); // Asegura que la matriz de vista se calcule inicialmente
     
 
@@ -1047,7 +1093,7 @@ void Game::CreateDeviceDependentResources()
 
     // Ajusta escala, rotación, posición para m_miPrimerModelo como lo tenías
     m_blacksmith->SetScale(0.2f); // Ejemplo
-    m_blacksmith->SetRotationEuler(DirectX::XM_PI, DirectX::XM_PIDIV2, 0.0f); // Ejemplo
+    m_blacksmith->SetRotationEuler(0.0f, DirectX::XM_PIDIV2, 0.0f); // Ejemplo
     
 
     m_green_tree1 = std::make_unique<Model>();
@@ -1066,7 +1112,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_green_tree1->SetScale(5.0f);
-    m_green_tree1->SetRotationEuler(DirectX::XM_PI, DirectX::XM_PI, 0.0f); 
+    m_green_tree1->SetRotationEuler(0.0f, DirectX::XM_PI, 0.0f); 
 
    
     m_forest_pine1 = std::make_unique<Model>();
@@ -1085,7 +1131,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_forest_pine1->SetScale(5.0f);
-    m_forest_pine1->SetRotationEuler(DirectX::XM_PI, DirectX::XM_PI, 0.0f);
+    m_forest_pine1->SetRotationEuler(0.0f, DirectX::XM_PI, 0.0f);
 
 
     m_forest_pine2 = std::make_unique<Model>();
@@ -1104,7 +1150,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_forest_pine2->SetScale(2.0f);
-    m_forest_pine2->SetRotationEuler(DirectX::XM_PI, DirectX::XM_PI, 0.0f);
+    m_forest_pine2->SetRotationEuler(0.0f, DirectX::XM_PI, 0.0f);
 
 
     m_forest_pine3 = std::make_unique<Model>();
@@ -1123,7 +1169,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_forest_pine3->SetScale(2.0f);
-    m_forest_pine3->SetRotationEuler(DirectX::XM_PI, DirectX::XM_PI, 0.0f);
+    m_forest_pine3->SetRotationEuler(0.0f, DirectX::XM_PI, 0.0f);
 
 
 
@@ -1144,7 +1190,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_cart->SetScale(0.1f);
-    m_cart->SetRotationEuler(DirectX::XM_PI, DirectX::XM_PIDIV2, 0.0f);
+    m_cart->SetRotationEuler(0.0f, DirectX::XM_PIDIV2, 0.0f);
 
     m_windmill = std::make_unique<Model>();
     if (!m_windmill->Load(device, context,
@@ -1162,7 +1208,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_windmill->SetScale(1.0f);
-    m_windmill->SetRotationEuler(DirectX::XM_PI, 0.0f, 0.0f);
+    m_windmill->SetRotationEuler(0.0f, 0.0f, 0.0f);
 
     m_rock1 = std::make_unique<Model>();
     if (!m_rock1->Load(device, context,
@@ -1180,7 +1226,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_rock1->SetScale(3.0f);
-    m_rock1->SetRotationEuler(DirectX::XM_PI, 0.0f, 0.0f);
+    m_rock1->SetRotationEuler(0.0f, 0.0f, 0.0f);
 
     m_rock2 = std::make_unique<Model>();
     if (!m_rock2->Load(device, context,
@@ -1198,7 +1244,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_rock2->SetScale(1.0f);
-    m_rock2->SetRotationEuler(DirectX::XM_PI, 0.0f, 0.0f);
+    m_rock2->SetRotationEuler(0.0f, 0.0f, 0.0f);
 
     m_rock3 = std::make_unique<Model>();
     if (!m_rock3->Load(device, context,
@@ -1216,7 +1262,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_rock3->SetScale(1.0f);
-    m_rock3->SetRotationEuler(DirectX::XM_PI, 0.0f, 0.0f);
+    m_rock3->SetRotationEuler(0.0f, 0.0f, 0.0f);
 
     m_rock4 = std::make_unique<Model>();
     if (!m_rock4->Load(device, context,
@@ -1234,7 +1280,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_rock4->SetScale(1.0f);
-    m_rock4->SetRotationEuler(DirectX::XM_PI, 0.0f, 0.0f);
+    m_rock4->SetRotationEuler(0.0f, 0.0f, 0.0f);
 
     m_rock5 = std::make_unique<Model>();
     if (!m_rock5->Load(device, context,
@@ -1252,7 +1298,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_rock5->SetScale(1.0f);
-    m_rock5->SetRotationEuler(DirectX::XM_PI, 0.0f, 0.0f);
+    m_rock5->SetRotationEuler(0.0f, 0.0f, 0.0f);
 
     m_rock6 = std::make_unique<Model>();
     if (!m_rock6->Load(device, context,
@@ -1270,7 +1316,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_rock6->SetScale(1.0f);
-    m_rock6->SetRotationEuler(DirectX::XM_PI, 0.0f, 0.0f);
+    m_rock6->SetRotationEuler(0.0f, 0.0f, 0.0f);
 
     // Modelo de casa 1
     m_house1 = std::make_unique<Model>();
@@ -1289,7 +1335,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_house1->SetScale(5.0f);
-    m_house1->SetRotationEuler(DirectX::XM_PI, DirectX::XM_PI, 0.0f);
+    m_house1->SetRotationEuler(0.0f, DirectX::XM_PI, 0.0f);
 
     //Modelo de casa 2
 
@@ -1309,7 +1355,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_house2->SetScale(5.0f);
-    m_house2->SetRotationEuler(DirectX::XM_PI, DirectX::XM_PI, 0.0f);
+    m_house2->SetRotationEuler(0.0f, DirectX::XM_PI, 0.0f);
 
     //Modelo de casa 3
 	m_house3 = std::make_unique<Model>();
@@ -1328,7 +1374,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_house3->SetScale(5.0f);
-    m_house3->SetRotationEuler(DirectX::XM_PI, -DirectX::XM_PIDIV2, 0.0f);
+    m_house3->SetRotationEuler(0.0f, -DirectX::XM_PIDIV2, 0.0f);
 
     //Modelo de casa 4
     m_house4 = std::make_unique<Model>();
@@ -1347,7 +1393,7 @@ void Game::CreateDeviceDependentResources()
     }
 
     m_house4->SetScale(5.0f);
-    m_house4->SetRotationEuler(DirectX::XM_PI, -DirectX::XM_PIDIV2, 0.0f);
+    m_house4->SetRotationEuler(0.0f, -DirectX::XM_PIDIV2, 0.0f);
     
     m_knight = std::make_unique<Model>();
     if (!m_knight->Load(device, context,
@@ -1362,8 +1408,8 @@ void Game::CreateDeviceDependentResources()
             throw std::runtime_error("Failed to load debug shaders for m_knight!");
         }
     }
-    m_knight->SetScale(0.1f);
-    m_knight->SetRotationEuler(DirectX::XM_PI, DirectX::XM_PI, 0.0f);
+    m_knight->SetScale(2.0f);
+    m_knight->SetRotationEuler(0.0f, DirectX::XM_PI, 0.0f);
     
 
     hr = CreateWICTextureFromFile(device, L"GameAssets\\textures\\firefly.png", nullptr, m_fireflyTexture.ReleaseAndGetAddressOf());
@@ -1452,11 +1498,6 @@ void Game::CreateDeviceDependentResources()
     if (m_house4 && m_terrain) {
         baseTransform = m_house4->GetWorldMatrix();
         AddInstancedObject(m_house4.get(), baseTransform, 243.79f, -32.0f, -9.0f, 0.0f);
-    }
-
-    if (m_knight && m_terrain) {
-        baseTransform = m_knight->GetWorldMatrix();
-        AddInstancedObject(m_knight.get(), baseTransform, 6.15f, -256.0f, -4.0f, 0.0f);
     }
 
     if (m_cart && m_terrain) {
@@ -1581,17 +1622,19 @@ void Game::CreateDeviceDependentResources()
     hr = device->CreateSamplerState(&samplerDesc, m_shadowSamplerState.ReleaseAndGetAddressOf());
     if (FAILED(hr)) throw std::runtime_error("Fallo al crear el sampler de comparación para sombras.");
 
+    // RASTERIZER STATE DEFINITIVO Y SEGURO
     D3D11_RASTERIZER_DESC rasterDesc = {};
     rasterDesc.FillMode = D3D11_FILL_SOLID;
+    rasterDesc.FrontCounterClockwise = true;
     rasterDesc.DepthClipEnable = true;
-    rasterDesc.CullMode = D3D11_CULL_BACK;
+    rasterDesc.CullMode = D3D11_CULL_NONE; // Modo estándar y seguro
 
-    rasterDesc.DepthBias = 100;  
+    // Bias para evitar shadow acne
+    rasterDesc.DepthBias = 4000;
+    rasterDesc.SlopeScaledDepthBias = 2.0f;
     rasterDesc.DepthBiasClamp = 0.0f;
-    rasterDesc.SlopeScaledDepthBias = 1.0f;// Aumentamos de 2.0 a 4.0
-    // --- FIN DE LA NUEVA CONFIGURACIN ---
 
-    hr = device->CreateRasterizerState(&rasterDesc, m_shadowRasterizerState.ReleaseAndGetAddressOf());
+    hr = device->CreateRasterizerState(&rasterDesc, &m_shadowRasterizerState);
     if (FAILED(hr)) throw std::runtime_error("Fallo al crear el estado de rasterizador para sombras.");
 
 
@@ -1813,37 +1856,57 @@ void Game::AddInstancedObject(
 void Game::RenderShadowPass()
 {
     auto context = m_deviceResources->GetD3DDeviceContext();
-    if (!m_shadowDepthState) return;
+    if (!m_shadowDepthState || !m_shadowRasterizerState) return;
 
-    // 1. Configurar la pipeline una sola vez para TODOS los objetos
+    // --- 1. Configuración de la Pipeline ---
     context->OMSetRenderTargets(0, nullptr, m_shadowMapDSV.Get());
     context->OMSetDepthStencilState(m_shadowDepthState.Get(), 0);
     context->ClearDepthStencilView(m_shadowMapDSV.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
+    context->RSSetState(m_shadowRasterizerState.Get());
 
     D3D11_VIEWPORT shadowViewport = { 0.0f, 0.0f, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 0.0f, 1.0f };
     context->RSSetViewports(1, &shadowViewport);
 
-    // Usamos el VS potente y el Input Layout correcto para todo
-    context->VSSetShader(m_shadowVertexShader_AlphaClip.Get(), nullptr, 0);
-    context->IASetInputLayout(m_shadowInputLayout.Get());
+    // --- 2. Definición de la Convención de la Luz ---
+    // Convención: m_lightData.directionalLightVector es un vector unitario que representa
+    // la DIRECCIÓN EN LA QUE VIAJA LA LUZ (ej. desde el sol hacia el mundo).
+    // Para la mayoría de los cálculos de iluminación (NdotL), necesitaremos su inverso.
+    Vector3 lightDirection = m_lightData.directionalLightVector;
 
-    // 2. Calcular matrices de la luz
-    Vector3 shadowFocusPoint = m_camera->GetPosition();
-    Vector3 lightPosition = shadowFocusPoint - (m_lightData.directionalLightVector * 400.0f); 
 
-    Vector3 lightUp = Vector3::Up;
+    Vector3 focusPoint = m_camera->GetPosition();
 
-    m_lightViewMatrix = Matrix::CreateLookAt(lightPosition, shadowFocusPoint, lightUp);
+    Vector3 lightPosition = focusPoint - (lightDirection * 500.0f); 
 
-    m_lightProjectionMatrix = Matrix::CreateOrthographic(500.f, 500.f, 1.0f, 800.0f);
+    // Vector "arriba" robusto para evitar problemas cuando la luz es cenital.
+    Vector3 lightUp;
+    if (abs(lightDirection.Dot(Vector3::Up)) < 0.9f) {
+        lightUp = Vector3::Up;
+    }
+    else {
+        lightUp = Vector3::Forward;
+    }
 
-    // 3. Dibujar los modelos
+    m_lightViewMatrix = Matrix::CreateLookAt(lightPosition, focusPoint, lightUp);
+
+    // --- 4. Creación de la Matriz de Proyección de la Luz (CreateOrthographic) ---
+    // Esta es una proyección ortográfica porque la luz del sol es direccional (rayos paralelos).
+    // Los valores de ancho/alto definen el área que cubrirá la sombra.
+    float orthoWidth = 500.0f;  // <-- Aumenta el rea de cobertura (antes 250)
+    float orthoHeight = 500.0f; // <-- Aumenta el rea de cobertura (antes 250)
+    float nearPlane = 1.0f;
+    float farPlane = 2000.0f;
+
+    m_lightProjectionMatrix = Matrix::CreateOrthographic(orthoWidth, orthoHeight, nearPlane, farPlane);
+
+    // --- 5. Dibujado de Objetos en el Pase de Sombras ---
+    context->IASetInputLayout(m_shadowInputLayout.Get()); // Usamos un layout unificado
+
+    // Bucle para dibujar los modelos
     for (const auto& instance : m_worldInstances)
     {
         if (instance.baseModel)
         {
-            context->RSSetState(m_shadowRasterizerState.Get());
-
             bool usesAlphaClip = (instance.baseModel == m_green_tree1.get() ||
                 instance.baseModel == m_forest_pine1.get() ||
                 instance.baseModel == m_forest_pine2.get() ||
@@ -1851,22 +1914,24 @@ void Game::RenderShadowPass()
 
             if (usesAlphaClip)
             {
+                context->VSSetShader(m_shadowVertexShader_AlphaClip.Get(), nullptr, 0);
                 context->PSSetShader(m_shadowPixelShader_AlphaClip.Get(), nullptr, 0);
             }
             else
             {
-                context->PSSetShader(nullptr, nullptr, 0);
+                context->VSSetShader(m_shadowVertexShader.Get(), nullptr, 0);
+                context->PSSetShader(nullptr, nullptr, 0); // No se necesita Pixel Shader para sólidos
             }
 
-            // Usamos siempre la funcin de dibujado ms completa
             instance.baseModel->ShadowDrawAlphaClip(context, instance.worldTransform, m_lightViewMatrix, m_lightProjectionMatrix, m_samplerState.Get());
         }
     }
 
-    // 4. Dibujar el terreno (slido, no necesita alfa)
+
+    // Dibujar el terreno
     if (m_terrain)
     {
-        context->RSSetState(m_shadowRasterizerState.Get());
+        context->VSSetShader(m_shadowVertexShader.Get(), nullptr, 0);
         context->PSSetShader(nullptr, nullptr, 0);
         m_terrain->ShadowDraw(context, m_lightViewMatrix, m_lightProjectionMatrix);
     }
@@ -1899,7 +1964,7 @@ void Game::RenderMinimapPass()
     Vector3 playerPos = m_camera->GetPosition();
     Vector3 mapCamPos = Vector3(playerPos.x, 150.0f, playerPos.z);
     Vector3 mapCamTarget = playerPos;
-    Matrix minimapView = Matrix::CreateLookAt(mapCamPos, mapCamTarget, Vector3::Forward);
+    Matrix minimapView = Matrix::CreateLookAt(mapCamPos, mapCamTarget, Vector3(0.0f, 1.0f, 0.0001f));
     Matrix minimapProj = Matrix::CreateOrthographic(150.f, 150.f, 1.0f, 400.0f);
 
     // 4. Dibujar la escena en el minimapa USANDO LA LUZ DEL MINIMAPA
@@ -1952,15 +2017,20 @@ void Game::UpdateDayNightCycle(float elapsedTime)
 
     // La trayectoria forma un arco en el cielo.
     // Y = altitud, Z = movimiento Este/Oeste, X = inclinación Norte/Sur
-    Vector3 finalLightDirection = Vector3(sin(cycleAngle) * 0.4f, sin(cycleAngle), cos(cycleAngle));
+    Vector3 finalLightDirection = Vector3(sin(cycleAngle) * 0.4f, -sin(cycleAngle), cos(cycleAngle));
     finalLightDirection.Normalize();
 
-    // Actualizamos la dirección de la luz en los datos que se enviarán al shader.
+    if (finalLightDirection.y > 0.0f)
+    {
+        finalLightDirection.y = -0.05f;
+        finalLightDirection.Normalize(); 
+    }
+
     m_lightData.directionalLightVector = finalLightDirection;
 
     // 3. DETERMINAR LA INFLUENCIA DEL SOL BASADO EN SU ALTURA
     // m_sunPower será 1.0 en el punto más alto del sol y 0.0 cuando esté en el horizonte o por debajo.
-    m_sunPower = std::clamp(finalLightDirection.y, 0.0f, 1.0f);
+    m_sunPower = std::clamp(-finalLightDirection.y, 0.0f, 1.0f);
 
     // 4. MEZCLAR COLORES E INTENSIDADES
 

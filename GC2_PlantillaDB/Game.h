@@ -214,6 +214,15 @@ private:
 	std::unique_ptr<Model> m_house4; //CASA MEDIANA
 	std::unique_ptr<Model> m_knight; //CABALLERO
 
+    // player logic
+
+    float m_walkBobTimer = 0.0f;  
+    float m_playerOffsetY = 2.5f;  
+    bool m_isThirdPerson = true;
+
+    DirectX::SimpleMath::Vector3 m_playerPos;
+
+
     // Collisions
     std::unique_ptr<DirectX::GeometricPrimitive> m_debugBoxDrawer;
     std::unique_ptr<DirectX::GeometricPrimitive> m_debugSphereDrawer;

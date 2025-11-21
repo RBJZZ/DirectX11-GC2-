@@ -251,8 +251,11 @@ void Model::ProcessNode(ID3D11Device* device, ID3D11DeviceContext* context, aiNo
     if (node == scene->mRootNode)
     {
         // Esta matriz rota -90 grados en el eje X. Convierte de Z-up a Y-up.
-        Matrix axisCorrectionMatrix = Matrix::CreateRotationX(DirectX::XM_PI);
+
+        Matrix axisCorrectionMatrix = Matrix::Identity;
         finalParentTransform = axisCorrectionMatrix * parentTransform;
+        /*Matrix axisCorrectionMatrix = Matrix::CreateRotationX(DirectX::XM_PI);
+        finalParentTransform = axisCorrectionMatrix * parentTransform;*/
     }
 
     // Obtener la transformacin local del nodo y combinarla con la de su padre (ya corregida si era el root)
@@ -1083,77 +1086,78 @@ void Model::CalculateOverallBoundingSphere() {
 
 void Model::ShadowDraw(
     ID3D11DeviceContext* context,
-    const DirectX::SimpleMath::Matrix& worldMatrix,
+    const DirectX::SimpleMath::Matrix& instanceWorldMatrix, // Renombrada para mayor claridad
     const DirectX::SimpleMath::Matrix& lightViewMatrix,
     const DirectX::SimpleMath::Matrix& lightProjectionMatrix)
 {
-    // No dibujar si no tenemos el buffer o no hay mallas
     if (!m_cbVS_Shadow || m_meshParts.empty())
     {
         return;
     }
 
-    OutputDebugStringA("Drawing model shadow...\n");
-
-    // Combinamos las matrices para obtener la World-View-Projection desde la luz
-    Matrix lightWorldViewProj = worldMatrix * lightViewMatrix * lightProjectionMatrix;
-
-    // --- Actualizar el Constant Buffer del Vertex Shader ---
-    D3D11_MAPPED_SUBRESOURCE mappedResource;
-    HRESULT hr = context->Map(m_cbVS_Shadow.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
-    if (FAILED(hr)) return;
-
-    CB_VS_Shadow_Data* dataPtr = (CB_VS_Shadow_Data*)mappedResource.pData;
-    dataPtr->World = worldMatrix; // Pasamos la matriz World de la instancia
-    dataPtr->LightViewProjection = lightViewMatrix * lightProjectionMatrix; // Pasamos la VP de la luz
-
-    context->Unmap(m_cbVS_Shadow.Get(), 0);
-
-    // Vinculamos el buffer al slot b0 del Vertex Shader (como espera nuestro ShadowVS.hlsl)
+    // Vinculamos el buffer al slot b0 del Vertex Shader una sola vez
     context->VSSetConstantBuffers(0, 1, m_cbVS_Shadow.GetAddressOf());
 
-    // --- Dibujar cada parte de la malla ---
-    // No necesitamos configurar materiales, texturas, etc. Solo la geometría.
     for (auto& meshPart : m_meshParts)
     {
-        meshPart.DrawPrim(context); // Dibuja la geometría usando los VBs/IBs
+        // --- INICIO DE LA CORRECCIN ---
+        // Calcular la matriz de mundo final para ESTA parte de la malla
+        Matrix finalWorldMatrix = meshPart.localNodeTransform * instanceWorldMatrix;
+
+        // Actualizar el Constant Buffer del Vertex Shader con la matriz correcta
+        D3D11_MAPPED_SUBRESOURCE mappedResource;
+        HRESULT hr = context->Map(m_cbVS_Shadow.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+        if (FAILED(hr)) continue; // Saltar si falla
+
+        CB_VS_Shadow_Data* dataPtr = (CB_VS_Shadow_Data*)mappedResource.pData;
+        dataPtr->World = finalWorldMatrix; // Usamos la matriz final calculada
+        dataPtr->LightViewProjection = lightViewMatrix * lightProjectionMatrix;
+        context->Unmap(m_cbVS_Shadow.Get(), 0);
+        // --- FIN DE LA CORRECCIN ---
+
+        // Dibujar la geometra de esta parte
+        meshPart.DrawPrim(context);
     }
 }
 
 void Model::ShadowDrawAlphaClip(
     ID3D11DeviceContext* context,
-    const DirectX::SimpleMath::Matrix& worldMatrix,
+    const DirectX::SimpleMath::Matrix& instanceWorldMatrix, // Renombrada para mayor claridad
     const DirectX::SimpleMath::Matrix& lightViewMatrix,
     const DirectX::SimpleMath::Matrix& lightProjectionMatrix,
     ID3D11SamplerState* sampler)
 {
     if (!m_cbVS_Shadow || m_meshParts.empty()) return;
 
-    Matrix lightWVP = worldMatrix * lightViewMatrix * lightProjectionMatrix;
-
-    D3D11_MAPPED_SUBRESOURCE mappedResource;
-    context->Map(m_cbVS_Shadow.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
-    CB_VS_Shadow_Data* dataPtr = (CB_VS_Shadow_Data*)mappedResource.pData;
-    dataPtr->World = worldMatrix; // El nuevo VS necesita la World matrix por separado
-    dataPtr->LightViewProjection = lightViewMatrix * lightProjectionMatrix;
-    context->Unmap(m_cbVS_Shadow.Get(), 0);
-
+    // Vinculamos el constant buffer y el sampler una vez fuera del bucle
     context->VSSetConstantBuffers(0, 1, m_cbVS_Shadow.GetAddressOf());
-
-    // Vinculamos el sampler que usarn todas las partes
     context->PSSetSamplers(0, 1, &sampler);
 
     for (auto& meshPart : m_meshParts)
     {
+        // --- INICIO DE LA CORRECCIN ---
+        // Calcular la matriz de mundo final para ESTA parte de la malla
+        Matrix finalWorldMatrix = meshPart.localNodeTransform * instanceWorldMatrix;
+
+        D3D11_MAPPED_SUBRESOURCE mappedResource;
+        context->Map(m_cbVS_Shadow.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+        CB_VS_Shadow_Data* dataPtr = (CB_VS_Shadow_Data*)mappedResource.pData;
+        dataPtr->World = finalWorldMatrix; // Usamos la matriz final
+        dataPtr->LightViewProjection = lightViewMatrix * lightProjectionMatrix;
+        context->Unmap(m_cbVS_Shadow.Get(), 0);
+        // --- FIN DE LA CORRECCIN ---
+
+        // Vincular textura para alpha clipping
         if (meshPart.materialIndex < m_materials.size())
         {
             const auto& material = m_materials[meshPart.materialIndex];
             if (material.diffuseTextureSRV)
             {
-                // Vinculamos la textura difusa de este material al slot t0
                 context->PSSetShaderResources(0, 1, material.diffuseTextureSRV.GetAddressOf());
             }
         }
+
+        // Dibujar la geometra de esta parte
         meshPart.DrawPrim(context);
     }
 }

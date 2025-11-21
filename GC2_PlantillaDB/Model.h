@@ -137,14 +137,14 @@ public:
 
     void ShadowDraw(
         ID3D11DeviceContext* context,
-        const DirectX::SimpleMath::Matrix& worldMatrix,
+        const DirectX::SimpleMath::Matrix& instanceWorldMatrix,
         const DirectX::SimpleMath::Matrix& lightViewMatrix,
         const DirectX::SimpleMath::Matrix& lightProjectionMatrix
     );
 
     void ShadowDrawAlphaClip(
         ID3D11DeviceContext* context,
-        const DirectX::SimpleMath::Matrix& worldMatrix,
+        const DirectX::SimpleMath::Matrix& instanceWorldMatrix, 
         const DirectX::SimpleMath::Matrix& lightViewMatrix,
         const DirectX::SimpleMath::Matrix& lightProjectionMatrix,
         ID3D11SamplerState* sampler

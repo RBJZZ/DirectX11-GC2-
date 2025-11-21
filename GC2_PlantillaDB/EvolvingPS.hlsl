@@ -55,9 +55,12 @@ float ApplyShadowFalloff(float currentShadowFactor, float2 shadowUV)
 
 float CalculatePCFShadowFactor(Texture2D shadowTex, SamplerComparisonState shadowSamp, float4 lightSpacePos, float bias)
 {
-    // 1. Proyeccin perspectiva y coordenadas de textura
+    // 1. Proyección perspectiva y normalización a [0, 1]
     lightSpacePos.xyz /= lightSpacePos.w;
-    float2 shadowTexCoord = float2(lightSpacePos.x * 0.5f + 0.5f, lightSpacePos.y * -0.5f + 0.5f);
+    
+    // 2. Transformación a coordenadas de textura (UV)
+    //    Esta es la fórmula estándar para DirectX. La 'Y' se invierte.
+    float2 shadowTexCoord = float2(lightSpacePos.x * 0.5f + 0.5f, -lightSpacePos.y * 0.5f + 0.5f);
 
     float shadowFactor = 0.0f;
     float2 texelSize;
@@ -65,22 +68,22 @@ float CalculatePCFShadowFactor(Texture2D shadowTex, SamplerComparisonState shado
     shadowTex.GetDimensions(width, height);
     texelSize = float2(1.0f / width, 1.0f / height);
 
-    // 2. Bucle del kernel 5x5
+    // 3. Bucle del kernel de muestreo (PCF 5x5)
     for (int y = -2; y <= 2; y++)
     {
         for (int x = -2; x <= 2; x++)
         {
-            // Muestrear y comparar la profundidad
+            // Muestrear y comparar la profundidad, aplicando el bias
             shadowFactor += shadowTex.SampleCmpLevelZero(
                 shadowSamp,
-                shadowTexCoord + float2(x, y) * texelSize, // Coordenada de la muestra actual
-                lightSpacePos.z - bias // Profundidad del pxel actual con bias
+                shadowTexCoord + float2(x, y) * texelSize,
+                lightSpacePos.z - bias
             );
         }
     }
 
-    // 3. Promediar los resultados
-    return shadowFactor / 25.0f; // Dividir por el nmero total de muestras (5*5=25)
+    // 4. Promediar los resultados
+    return shadowFactor / 25.0f;
 }
 
 float4 main(PixelInputType_Evolving input) : SV_TARGET
@@ -93,8 +96,9 @@ float4 main(PixelInputType_Evolving input) : SV_TARGET
     clip(albedo.a - alphaClipThreshold);
 
     // Clculos de vectores de iluminacin
+    float3 L = -normalize(directionalLightVector);
     float3 N = normalize(input.worldNormal);
-    float3 L = normalize(directionalLightVector);
+    float3 V = normalize(cameraPositionWorld - input.worldPosition);
     float4 ambient = ambientLightColor * materialDiffuseColor * albedo;
     float NdotL = saturate(dot(N, L));
     float4 diffuse = NdotL * directionalLightColor * materialDiffuseColor * albedo;
