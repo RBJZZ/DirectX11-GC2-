@@ -13,11 +13,15 @@ SamplerComparisonState shadowSampler : register(s1);
 cbuffer LightProperties : register(b1)
 {
     float3 cameraPositionWorld;
-    float _pad0;
+    float time;
     float3 directionalLightVector;
     float _pad1;
     float4 directionalLightColor;
     float4 ambientLightColor;
+
+    float4 pointLightColor;
+    float3 pointLightPos;
+    float pointLightRange;
 };
 
 // NUEVO Constant Buffer para los parámetros del material
@@ -78,13 +82,13 @@ float CalculatePCFShadowFactor(Texture2D shadowTex, SamplerComparisonState shado
 
 float4 main(PixelInputType input) : SV_TARGET
 {
-
+    // 1. Muestreo de Texturas
     float4 colorDirt = dirtTexture.Sample(textureSampler, input.texCoord);
     float4 colorGrass = grassTexture.Sample(textureSampler, input.texCoord);
     float4 colorSnow = snowTexture.Sample(textureSampler, input.texCoord);
     float4 colorRock = rockTexture.Sample(textureSampler, input.texCoord);
     
-
+    // 2. Mezcla por Altura (Multitextura)
     float normalizedHeight = saturate(input.scaledLocalY / input.maxHeight);
     
     float grassFactor = smoothstep(dirtMaxHeight - blendRange, dirtMaxHeight + blendRange, normalizedHeight);
@@ -93,16 +97,19 @@ float4 main(PixelInputType input) : SV_TARGET
     float4 heightBlendedColor = lerp(colorDirt, colorGrass, grassFactor);
     heightBlendedColor = lerp(heightBlendedColor, colorSnow, snowFactor);
 
+    // 3. Mezcla por Pendiente (Rocas)
     float3 worldUp = float3(0, 1, 0);
     float slope = 1.0 - saturate(dot(input.worldNormal, worldUp));
     float rockFactor = smoothstep(rockSlopeThreshold, rockSlopeThreshold + 0.15, slope);
 
     float4 blendedAlbedo = lerp(heightBlendedColor, colorRock, rockFactor);
     
+    // 4. Vectores de Luz Global
     float3 L = -normalize(directionalLightVector);
     float3 N = normalize(input.worldNormal);
     float3 V = normalize(cameraPositionWorld - input.worldPosition);
 
+    // 5. Iluminación Direccional (Sol/Luna)
     float4 ambient = ambientLightColor * blendedAlbedo;
     float NdotL = saturate(dot(N, L));
     float4 diffuse = NdotL * directionalLightColor * blendedAlbedo;
@@ -112,10 +119,10 @@ float4 main(PixelInputType input) : SV_TARGET
     {
         float3 H = normalize(L + V);
         float NdotH = saturate(dot(N, H));
-        specular = pow(NdotH, 4.0f) * directionalLightColor * 0.1f;
+        specular = pow(NdotH, 4.0f) * directionalLightColor * 0.1f; // Especular bajo para terreno
     }
 
-    // Cálculo de sombras
+    // 6. Sombras (Solo afecta a la luz direccional)
     float4 lightSpacePos = input.positionInLightSpace;
     lightSpacePos.xyz /= lightSpacePos.w;
     float2 shadowTexCoord = float2(lightSpacePos.x * 0.5f + 0.5f, -lightSpacePos.y * 0.5f + 0.5f);
@@ -126,7 +133,44 @@ float4 main(PixelInputType input) : SV_TARGET
     float shadowFactor = CalculatePCFShadowFactor(shadowMap, shadowSampler, input.positionInLightSpace, bias);
     float finalLightFactor = lightVisibility * shadowFactor;
     
+    // ==========================================================
+    // 7. CÁLCULO DE LUZ DE PUNTO (HORNO)
+    // ==========================================================
+    float3 terrainPointLight = float3(0, 0, 0);
+    
+    // Vector desde el píxel del suelo hacia la luz
+    float3 lightDirP = pointLightPos - input.worldPosition;
+    float distP = length(lightDirP);
+
+    // Si el píxel está dentro del rango de la luz del horno
+    if (distP < pointLightRange)
+    {
+        // Atenuación (Caída de luz cuadrática)
+        float att = saturate(1.0f - distP / pointLightRange);
+        att *= att;
+        
+        lightDirP = normalize(lightDirP);
+        
+        // Difusa (El suelo se ilumina de naranja)
+        float NdotL_P = saturate(dot(N, lightDirP));
+        
+        // Especular (Opcional: hace que el suelo brille un poco si es rocoso)
+        float3 H_P = normalize(lightDirP + V);
+        float NdotH_P = saturate(dot(N, H_P));
+        float specP = pow(NdotH_P, 16.0f) * 0.3f; // Brillo sutil en el suelo
+
+        // Combinar: (Difusa + Especular) * ColorLuz * Intensidad * Atenuación * ColorSuelo
+        terrainPointLight = (NdotL_P + specP) * pointLightColor.rgb * pointLightColor.a * att * blendedAlbedo.rgb;
+    }
+    // ==========================================================
+
+    // 8. Combinación Final
+    // Color = Ambiental + (Sol * Sombra) + LuzHorno
     float4 finalColor = ambient + (diffuse + specular) * finalLightFactor;
+    
+    // Sumamos la luz del horno (Additiva, brilla en la oscuridad)
+    finalColor.rgb += terrainPointLight;
+
     finalColor.a = blendedAlbedo.a;
 
     return finalColor;

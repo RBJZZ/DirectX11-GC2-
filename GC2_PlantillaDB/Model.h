@@ -36,11 +36,15 @@ struct VSPerObjectData
 struct PSLightPropertiesData // Esta estructura la llenará y actualizará la clase Game
 {
     DirectX::SimpleMath::Vector3 cameraPositionWorld;
-    float _pad0; // Padding
+    float time; // Padding
     DirectX::SimpleMath::Vector3 directionalLightVector; // Hacia la fuente de luz
     float _pad1; // Padding
     DirectX::SimpleMath::Vector4 directionalLightColor;
     DirectX::SimpleMath::Vector4 ambientLightColor;
+
+    DirectX::SimpleMath::Vector4 pointLightColor; // Color (RGB) e Intensidad (A)
+    DirectX::SimpleMath::Vector3 pointLightPos;   // Posición
+    float pointLightRange;
 };
 
 struct PSMaterialPropertiesData
@@ -95,7 +99,8 @@ public:
         const DirectX::SimpleMath::Matrix& lightViewMatrix,
         const DirectX::SimpleMath::Matrix& lightProjectionMatrix,
         ID3D11ShaderResourceView* shadowMapSRV,
-        ID3D11SamplerState* shadowSampler
+        ID3D11SamplerState* shadowSampler,
+        ID3D11PixelShader* pixelShaderOverride = nullptr
     );
 
     // --- MÉTODOS PARA GESTIONAR TRANSFORMACIONES INDIVIDUALES ---
@@ -131,7 +136,8 @@ public:
         const DirectX::BoundingBox& worldSpaceQueryBox,
         const DirectX::SimpleMath::Matrix& instanceWorldMatrix, // <--- ¡Este parámetro es crucial!
         std::vector<DirectX::BoundingBox>& boxesToDrawDebug,
-        bool shouldAddDebugBox) const;
+        bool shouldAddDebugBox,
+        DirectX::SimpleMath::Vector3 boxPadding = DirectX::SimpleMath::Vector3::Zero) const;
     const DirectX::BoundingSphere& GetOverallLocalBoundingSphere() const;
     DirectX::BoundingSphere GetOverallWorldBoundingSphere() const;
 
@@ -149,6 +155,9 @@ public:
         const DirectX::SimpleMath::Matrix& lightProjectionMatrix,
         ID3D11SamplerState* sampler
     );
+
+    void SetSharedTextures(const std::vector<ID3D11ShaderResourceView*>& textures);
+
 private:
     // Estructura para representar una parte de la malla (sub-malla) de un modelo
     struct MeshPart

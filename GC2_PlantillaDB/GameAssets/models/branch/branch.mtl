@@ -1,0 +1,13 @@
+# Blender 4.5.3 LTS MTL File: 'None'
+# www.blender.org
+
+newmtl blinn1
+Ns 63.117920
+Ka 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 2
+map_Kd Tree_Branch_COLOR.png
+map_d Tree_Branch_COLOR.png
+map_Bump -bm 1.000000 C:/Tree_Branch_NRM.png

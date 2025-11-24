@@ -22,9 +22,10 @@ struct GameObjectInstance
 {
     Model* baseModel = nullptr;
     DirectX::SimpleMath::Matrix worldTransform;
+    bool useAutoCollision;
 
-    GameObjectInstance(Model* model, const DirectX::SimpleMath::Matrix& transform)
-        : baseModel(model), worldTransform(transform) {
+    GameObjectInstance(Model* model, const DirectX::SimpleMath::Matrix& transform, bool autoCol=true)
+        : baseModel(model), worldTransform(transform), useAutoCollision(autoCol){
     }
 };
 
@@ -36,6 +37,24 @@ struct FireflyParticle
     float maxLifetime;
     float blinkTimer;
     float rotation;
+};
+
+struct SmokeParticle
+{
+    DirectX::SimpleMath::Vector3 position;
+    DirectX::SimpleMath::Vector3 velocity;
+    float lifetime;
+    float maxLifetime;
+    float scale;     
+    float alpha;     
+};
+
+struct GameItem
+{
+    DirectX::SimpleMath::Vector3 position;
+    bool isActive = true;          // Si es true, existe en el mundo
+    int type = 0;                  // 0 = Pieza Mística, 1 = Leña
+    float radius = 20.0f;           // Distancia para recogerlo
 };
 
 // A basic game implementation that creates a D3D11 device and
@@ -93,11 +112,33 @@ private:
         float instanceX,
         float instanceZ,
         float fallbackY,
-        float modelSpecificOffsetY
+        float modelSpecificOffsetY,
+		bool useAutoCollision = true
     );
 
     void RenderShadowPass();
     void RenderMinimapPass();
+
+    // --- Update() Function Helpers
+    void UpdateInput(float elapsedTime);              // Leer teclado/mouse
+    void UpdatePlayer(float elapsedTime); // Movimiento WASD, Montar caballo, Física
+    void UpdateCamera(float elapsedTime); // Toda la lógica que acabamos de arreglar
+    void UpdateGameplay(float elapsedTime); // Win/Lose, Coleccionables, Tiempo
+    void UpdateWorld(float elapsedTime);    // Ciclo día/noche, Luciérnagas
+
+    // --- Render() Function Helpers
+    void RenderScene();           // Terreno, Modelos, Jugador, Skybox, Debug 3D
+    void RenderParticles();       // Luciérnagas (Transparencias)
+    void RenderPostProcessing();  // Bloom
+    void RenderUI();              // HUD 2D y Minimapa
+
+    void BuildCustomColliders();
+    void RenderInteractionBillboards();
+
+    // -- Editor Mode
+	void UpdateEditor(float elapsedTime);
+
+
     // Device resources.
     std::unique_ptr<DX::DeviceResources> m_deviceResources;
 
@@ -136,6 +177,10 @@ private:
     std::unique_ptr<DirectX::SpriteFont>    m_font;
     std::unique_ptr<DirectX::BasicEffect>   m_spriteEffect;
     Microsoft::WRL::ComPtr<ID3D11InputLayout> m_spriteInputLayout;
+
+    // UI ELEMENTS
+
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_blankTexture;
 
     // Recursos para el Sistema de Partculas de Lucirnagas
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_fireflyVertexBuffer;
@@ -213,6 +258,33 @@ private:
 	std::unique_ptr<Model> m_house3; //CASA GRANDE
 	std::unique_ptr<Model> m_house4; //CASA MEDIANA
 	std::unique_ptr<Model> m_knight; //CABALLERO
+	std::unique_ptr<Model> m_crystal; //CRISTAL MISTICO
+    std::unique_ptr<Model> m_branch; //RAMA
+	std::unique_ptr<Model> m_axe; //HOGUERA
+	std::unique_ptr<Model> m_dungeonGate; //DUNGEON ENTRANCE
+	std::unique_ptr<Model> m_dungeonInterior; //DUNGEON 
+	std::unique_ptr<Model> m_log; //TRONCO 
+	std::unique_ptr<Model> m_sword; //ESPADA
+
+
+    // MODEL POSES
+    std::vector<std::unique_ptr<Model>> m_animIdle;   // Lista dinámica para Idle
+    std::vector<std::unique_ptr<Model>> m_animWalk;   // Lista dinámica para Walk
+    std::vector<std::unique_ptr<Model>> m_animMelee;
+    Model* m_currentModel = nullptr;                  // Puntero al modelo actual
+
+    // Variables de tiempo
+    float m_animTimer = 0.0f;
+    int m_currentFrame = 0;
+    bool m_wasMoving = false; // Para detectar cambio de estado
+
+    void LoadAnimationSequence(
+        std::vector<std::unique_ptr<Model>>& targetVector,
+        std::string basePath,
+        int count,
+        ID3D11Device* device,
+        ID3D11DeviceContext* context
+    );
 
     // player logic
 
@@ -221,7 +293,6 @@ private:
     bool m_isThirdPerson = true;
 
     DirectX::SimpleMath::Vector3 m_playerPos;
-
 
     // Collisions
     std::unique_ptr<DirectX::GeometricPrimitive> m_debugBoxDrawer;
@@ -260,7 +331,11 @@ private:
     Microsoft::WRL::ComPtr<ID3D11VertexShader> m_shadowVertexShader_AlphaClip; 
     Microsoft::WRL::ComPtr<ID3D11PixelShader>  m_shadowPixelShader_AlphaClip;
 
-    static const int SHADOW_MAP_SIZE = 2048;
+    //Shaders
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> m_mysticPS;
+
+
+    static const int SHADOW_MAP_SIZE = 1024;
 
     // Minimap Resources
     Microsoft::WRL::ComPtr<ID3D11Texture2D>           m_minimapTexture;
@@ -294,6 +369,33 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_cbBloomParameters;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_cbBlurParameters;
 
+    // USER INTERFACE (UI)
+
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_uiAxeTexture;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_uiSwordTexture;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_uiBranchTexture;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_uiRockTexture;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_uiMysticTexture;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_InteractionTexture;
+	Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_AnvilTexture;
+	Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_uiLogTexture;
+	Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_uiMysticCookedTexture;
+
+    float m_itemPopupTimer = 0.0f;
+    int m_popupItemType = -1;
+
+    // PARTICLES
+    //SMOKE
+
+    std::vector<SmokeParticle> m_smokeParticles;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_smokeTexture;
+    static const int NUM_SMOKE_PARTICLES = 50; 
+    DirectX::SimpleMath::Vector3 m_chimneyPos; 
+
+    void InitializeSmoke();
+    void UpdateSmoke(float elapsedTime);
+    void RenderSmoke(); 
+
     struct CB_BloomParameters
     {
         float bloomThreshold = 0.5f;
@@ -315,5 +417,75 @@ private:
     // GRADIENTS
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_colorGradingLutSRV;
 
-    
+    // GAME LOGIC
+
+    std::vector<GameItem> m_gameItems; // Lista de todos los objetos
+
+    int m_collectedPieces = 0;      // Cuántas piezas llevas
+    bool m_hasFirewood = false;     // ¿Tienes la leña?
+    bool m_swordRepaired = false;  
+
+    // Inventory
+
+    int m_stonesCount = 0;
+    int m_branchesCount = 0;
+
+    const int COST_STONES = 3;
+    const int COST_BRANCHES = 3;
+
+    bool m_gameWon = false;
+    bool m_gameLost = false;
+    float m_gameTimer = 300.0f;     
+
+    bool m_isChopping = false;
+    float m_treeInteractTimer = 0.0f; 
+    const float TREE_COOLDOWN = 1.0f; 
+    bool m_hasAxe = false;
+    int m_currentToolId = 0;
+
+    int m_woodCount;         
+    int m_rawStonesCount;    
+    int m_refinedStonesCount; 
+
+    // Lógica de Tala
+    bool m_hasHitTreeThisSwing;
+
+    // Lógica del Horno
+    bool m_isCooking;
+    float m_furnaceTimer;
+    DirectX::BoundingBox m_furnaceTriggerBox;
+
+    // Lógica de Mazmorra y Victoria
+    bool m_isInDungeon;
+    DirectX::SimpleMath::Vector3 m_dungeonSpawnPos;
+    DirectX::BoundingBox m_catacombsEntranceTrigger;
+    DirectX::BoundingBox m_dungeonAltarTrigger;
+
+
+
+    DirectX::SimpleMath::Vector3 m_blacksmithPos = DirectX::SimpleMath::Vector3(-70.7f, 3.5f, 563.0f);
+    DirectX::SimpleMath::Vector3 m_catacombsPos = DirectX::SimpleMath::Vector3(-50.0f, 0.0f, -50.0f);
+
+    // INTERACTION BOUNDING BOXES
+
+    DirectX::BoundingBox m_anvilTriggerBox;
+
+
+    // LOCATION BOUNDING BOXES
+    std::vector<DirectX::BoundingBox> m_customColliders;
+
+    // END GAME LOGIC
+
+    // DEBUG UI
+
+    std::wstring m_debugModelName = L"";
+
+
+    // EDITOR MODE
+    bool m_inEditorMode = false;
+    int m_selectedInstanceIndex = 0; 
+    float m_editorMoveSpeed = 20.0f;
+    float m_editorRotSpeed = 1.5f;
+
+
 };

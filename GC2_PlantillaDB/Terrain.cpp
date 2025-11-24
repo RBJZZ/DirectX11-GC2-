@@ -19,7 +19,7 @@ Terrain::Terrain() :
     m_terrainWidth(0),
     m_terrainHeight(0),
     m_heightScale(300.0f),
-    m_textureTilingFactor(8.0f),
+    m_textureTilingFactor(16.0f),
     m_vertexCount(0),
     m_indexCount(0),
     m_worldMatrix(Matrix::Identity)

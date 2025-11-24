@@ -456,18 +456,19 @@ void DeviceResources::HandleDeviceLost()
 void DeviceResources::Present()
 {
     HRESULT hr = E_FAIL;
-    if (m_options & c_AllowTearing)
-    {
-        // Recommended to always use tearing if supported when using a sync interval of 0.
-        hr = m_swapChain->Present(0, DXGI_PRESENT_ALLOW_TEARING);
-    }
-    else
-    {
-        // The first argument instructs DXGI to block until VSync, putting the application
-        // to sleep until the next VSync. This ensures we don't waste any cycles rendering
-        // frames that will never be displayed to the screen.
-        hr = m_swapChain->Present(1, 0);
-    }
+    //if (m_options & c_AllowTearing)
+    //{
+    //    // Recommended to always use tearing if supported when using a sync interval of 0.
+    //    hr = m_swapChain->Present(0, DXGI_PRESENT_ALLOW_TEARING);
+    //}
+    //else
+    //{
+    //    // The first argument instructs DXGI to block until VSync, putting the application
+    //    // to sleep until the next VSync. This ensures we don't waste any cycles rendering
+    //    // frames that will never be displayed to the screen.
+    //    hr = m_swapChain->Present(1, 0);
+    //}
+    hr = m_swapChain->Present(1, 0);
 
     // Discard the contents of the render target.
     // This is a valid operation only when the existing contents will be entirely

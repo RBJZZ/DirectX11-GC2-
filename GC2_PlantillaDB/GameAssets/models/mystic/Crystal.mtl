@@ -1,0 +1,12 @@
+# Blender 4.5.3 LTS MTL File: 'uploads_files_5892008_Crystal.blend'
+# www.blender.org
+
+newmtl Crystal
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd Crystal_BaseColor_sRGB.png
+map_Ns C:/Crystal_Roughness_Raw.png
+map_Ke C:/Crystal_Emission_sRGB.png

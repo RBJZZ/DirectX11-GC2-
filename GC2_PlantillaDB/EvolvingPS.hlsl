@@ -6,14 +6,18 @@ Texture2D shadowMap : register(t1);
 SamplerComparisonState shadowSampler : register(s1);
 
 // Constant Buffer para las propiedades globales de la luz (desde Game.cpp)
-cbuffer LightProperties : register(b1) // Asegúrate que este slot (b1) se use en C++
+cbuffer LightProperties : register(b1)
 {
-    float3 cameraPositionWorld; // Posición de la cámara en el mundo
-    float _paddingToAlignCamPos; // Padding
-    float3 directionalLightVector; // Vector normalizado DESDE la superficie HACIA la luz
-    float _paddingToAlignLightVec; // Padding
-    float4 directionalLightColor; // Color e intensidad de la luz direccional
-    float4 ambientLightColor; // Color e intensidad de la luz ambiental global
+    float3 cameraPositionWorld;
+    float time;
+    float3 directionalLightVector;
+    float _pad1;
+    float4 directionalLightColor;
+    float4 ambientLightColor;
+
+    float4 pointLightColor;
+    float3 pointLightPos;
+    float pointLightRange;
 };
 
 // Constant Buffer para las propiedades del material de la malla actual (desde Model.cpp)
@@ -89,57 +93,91 @@ float CalculatePCFShadowFactor(Texture2D shadowTex, SamplerComparisonState shado
 float4 main(PixelInputType_Evolving input) : SV_TARGET
 {
     // Obtener el color base de la textura
-    float4 albedo = diffuseTexture.Sample(textureSampler, input.texCoord); 
+    float4 albedo = diffuseTexture.Sample(textureSampler, input.texCoord);
 
-    // Alpha clipping para las hojas de los rboles
+    // Alpha clipping para las hojas de los árboles
     float alphaClipThreshold = 0.5f;
     clip(albedo.a - alphaClipThreshold);
 
-    // Clculos de vectores de iluminacin
-    float3 L = -normalize(directionalLightVector);
+    // --- CÁLCULOS BÁSICOS ---
     float3 N = normalize(input.worldNormal);
     float3 V = normalize(cameraPositionWorld - input.worldPosition);
+    
+    // 1. Luz Ambiental
     float4 ambient = ambientLightColor * materialDiffuseColor * albedo;
+
+    // 2. Luz Direccional (Sol/Luna)
+    float3 L = -normalize(directionalLightVector);
     float NdotL = saturate(dot(N, L));
     float4 diffuse = NdotL * directionalLightColor * materialDiffuseColor * albedo;
+    
     float4 specular = float4(0.0f, 0.0f, 0.0f, 0.0f);
     if (NdotL > 0.0f)
     {
-        float3 V = normalize(cameraPositionWorld - input.worldPosition);
         float3 R = reflect(-L, N);
         float RdotV = saturate(dot(R, V));
         specular = pow(RdotV, specularPower) * directionalLightColor * materialSpecularColor;
     }
 
-    // --- LGICA FINAL Y CORRECTA DE SOMBRAS ---
-    
-    // 1. Empezamos con el color base siendo solo la luz ambiental.
-    float4 finalColor = ambient;
-    
-    float4 lightSpacePos = input.positionInLightSpace; // Copiamos para claridad
+    // --- CÁLCULO DE SOMBRAS (SOL) ---
+    float4 lightSpacePos = input.positionInLightSpace;
     lightSpacePos.xyz /= lightSpacePos.w;
     float2 shadowTexCoord = float2(lightSpacePos.x * 0.5f + 0.5f, -lightSpacePos.y * 0.5f + 0.5f);
 
-    // 3. Calculamos la visibilidad de la luz (el desvanecimiento en los bordes)
+    // Falloff (bordes)
     float2 fromCenter = abs(shadowTexCoord - 0.5f) * 2.0f;
     float dist = max(fromCenter.x, fromCenter.y);
-    float falloffStart = 0.85f;
-    float falloffEnd = 0.98f;
-    float lightVisibility = 1.0 - smoothstep(falloffStart, falloffEnd, dist);
+    float lightVisibility = 1.0 - smoothstep(0.85f, 0.98f, dist);
 
-    // 4. Calculamos el factor de sombra (si el pxel est tapado o no)
+    // PCF (Sombra suave)
     float bias = 0.0005f;
     float shadowFactor = CalculatePCFShadowFactor(shadowMap, shadowSampler, input.positionInLightSpace, bias);
     
-    // 5. COMBINACIN FINAL:
-    // El factor de luz final es el producto de la visibilidad Y si est en sombra.
     float finalLightFactor = lightVisibility * shadowFactor;
+
+    // --- 3. LUZ DE PUNTO (HORNO) ---
+    // Esta luz se SUMA aparte, NO tiene sombras del sol.
     
-    // 6. Aadimos la luz direccional y especular, modulada por nuestro factor final.
-    finalColor = materialEmissiveColor + ambient + (diffuse + specular) * finalLightFactor;
+    float3 pointLightResult = float3(0, 0, 0);
+    
+    // Vector desde el píxel hacia la luz del horno
+    float3 lightDirPoint = pointLightPos - input.worldPosition;
+    float distanceToLight = length(lightDirPoint);
+
+    // Solo calcular si estamos dentro del rango
+    if (distanceToLight < pointLightRange)
+    {
+        // Atenuación: La luz se apaga suavemente con la distancia
+        float attenuation = saturate(1.0f - distanceToLight / pointLightRange);
+        attenuation *= attenuation; // Cuadrática para más realismo (se ve mejor)
+
+        lightDirPoint = normalize(lightDirPoint);
+
+        // Difusa (Punto)
+        float NdotL_Point = saturate(dot(N, lightDirPoint));
+        float3 pDiffuse = NdotL_Point * pointLightColor.rgb * pointLightColor.a * attenuation;
+
+        // Especular (Punto) - ¡Hace que la armadura brille naranja!
+        float3 pSpecular = float3(0, 0, 0);
+        if (NdotL_Point > 0.0f)
+        {
+            float3 R_Point = reflect(-lightDirPoint, N);
+            float RdotV_Point = saturate(dot(R_Point, V));
+            pSpecular = pow(RdotV_Point, specularPower) * pointLightColor.rgb * attenuation;
+        }
+
+        // Sumar difusa y especular, multiplicadas por el color del objeto
+        pointLightResult = (pDiffuse + pSpecular) * albedo.rgb;
+    }
+
+    // --- COMBINACIÓN FINAL ---
+    // Color = Emisivo + Ambiental + (Sol * Sombra) + LuzHorno
+    float4 finalColor = materialEmissiveColor + ambient + (diffuse + specular) * finalLightFactor;
+    
+    // Sumamos la luz del horno al final
+    finalColor.rgb += pointLightResult;
     
     finalColor.a = albedo.a;
 
     return finalColor;
 }
-

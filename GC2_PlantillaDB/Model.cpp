@@ -424,18 +424,49 @@ ComPtr<ID3D11ShaderResourceView> Model::LoadTextureFromFile(ID3D11Device* device
 {
     if (textureFilenameInModel.empty()) return nullptr;
 
-    std::string fullPath = m_modelDirectory + "/" + textureFilenameInModel;
+    std::string fullPath;
 
-    // Reemplazar barras inclinadas si es necesario para consistencia de rutas
-    for (char& c : fullPath) {
+    // --- INICIO DE LA CORRECCIÓN CRÍTICA ---
+    // 1. Convertir la ruta a usar barras '/' para consistencia.
+    std::string cleanFilename = textureFilenameInModel;
+    for (char& c : cleanFilename) {
         if (c == '\\') c = '/';
     }
-    // Assimp a veces da rutas con './' o '../', intentamos simplificar un poco, aunque esto no es un normalizador completo.
-    // Si la ruta comienza con "./", quitarlo.
-    if (fullPath.rfind("./", 0) == 0) {
-        fullPath = fullPath.substr(2);
+
+    // 2. Comprobar si ya es una ruta absoluta/completa o si contiene una ruta de acceso.
+    // Buscamos si empieza con "C:", "D:", o si contiene una ruta de directorio explícita.
+    bool isFullPath = (cleanFilename.size() >= 3 && cleanFilename[1] == ':') ||
+        (cleanFilename.rfind("../", 0) == 0) ||
+        (cleanFilename.rfind("/", 0) == 0) ||
+        (cleanFilename.rfind("GameAssets/", 0) == 0); // Esto es una heurística
+
+    if (isFullPath)
+    {
+        // Si ya parece una ruta completa o relativa al proyecto (como Assimp la generó),
+        // intentamos limpiarla para que sea relativa a la raíz del proyecto (GameAssets).
+        // La ruta errónea del log: C:/Users/rebeq/source/repos/GC2_PlantillaDB/GC2_PlantillaDB/GameAssets/models/knight/ID02_Base_color.png
+
+        // Intentar encontrar la subcadena "GameAssets" y usar solo lo que viene después.
+        size_t pos = cleanFilename.rfind("GameAssets/");
+        if (pos != std::string::npos) {
+            // Usar la ruta relativa desde la carpeta GameAssets
+            fullPath = cleanFilename.substr(pos);
+        }
+        else {
+            // Si no se encuentra GameAssets, asumimos que solo es el nombre del archivo.
+            // Si la ruta absoluta está incrustada en el MTL, Assimp puede devolver esto.
+            // Usaremos solo el nombre del archivo y lo combinaremos con m_modelDirectory.
+            size_t lastSlash = cleanFilename.find_last_of('/');
+            std::string filenameOnly = (lastSlash == std::string::npos) ? cleanFilename : cleanFilename.substr(lastSlash + 1);
+            fullPath = m_modelDirectory + "/" + filenameOnly;
+        }
+
     }
-    // (Una normalización de ruta más robusta podría ser necesaria para casos complejos)
+    else
+    {
+        // Si es solo un nombre de archivo simple, lo combinamos con el directorio del modelo.
+        fullPath = m_modelDirectory + "/" + cleanFilename;
+    }
 
 
     std::wstring wFullPath = StringToWString(fullPath);
@@ -472,9 +503,9 @@ void Model::MeshPart::DrawPrim(ID3D11DeviceContext* context)
     context->IASetVertexBuffers(0, 1, vertexBuffer.GetAddressOf(), &stride, &offset);
     context->IASetIndexBuffer(indexBuffer.Get(), DXGI_FORMAT_R32_UINT, 0);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    wchar_t buffer[128];
+    /*wchar_t buffer[128];
     swprintf_s(buffer, L"Attempting to draw MeshPart with IndexCount: %u, MaterialIndex: %u\n", indexCount, materialIndex);
-    OutputDebugString(buffer);
+    OutputDebugString(buffer);*/
     context->DrawIndexed(indexCount, 0, 0);
 }
 
@@ -602,7 +633,8 @@ void Model::EvolvingDraw(ID3D11DeviceContext* context,
     const Matrix& lightViewMatrix,
     const Matrix& lightProjectionMatrix,
     ID3D11ShaderResourceView* shadowMapSRV,
-    ID3D11SamplerState* shadowSampler)
+    ID3D11SamplerState* shadowSampler,
+    ID3D11PixelShader* pixelShaderOverride)
 {
     if (!m_evolvingVertexShader || !m_evolvingPixelShader || !m_evolvingInputLayout || m_meshParts.empty() ||
         !m_cbVS_Evolving_WVP || !m_cbPS_MaterialProperties)
@@ -615,6 +647,15 @@ void Model::EvolvingDraw(ID3D11DeviceContext* context,
     context->IASetInputLayout(m_evolvingInputLayout.Get());
     context->VSSetShader(m_evolvingVertexShader.Get(), nullptr, 0);
     context->PSSetShader(m_evolvingPixelShader.Get(), nullptr, 0);
+
+    if (pixelShaderOverride)
+    {
+        context->PSSetShader(pixelShaderOverride, nullptr, 0);
+    }
+    else
+    {
+        context->PSSetShader(m_evolvingPixelShader.Get(), nullptr, 0);
+    }
 
     if (samplerState) context->PSSetSamplers(0, 1, &samplerState);
     if (lightPropertiesCB) context->PSSetConstantBuffers(1, 1, &lightPropertiesCB); 
@@ -995,15 +1036,15 @@ DirectX::BoundingSphere Model::GetOverallWorldBoundingSphere() const {
 
 
 bool Model::CheckCollisionAgainstParts(
-    const DirectX::BoundingBox& worldSpaceQueryBox,    // Es la cameraFutureBox desde Game::Update
-    const DirectX::SimpleMath::Matrix& instanceWorldMatrix, // Es la instance.worldTransform desde Game::Update
+    const DirectX::BoundingBox& worldSpaceQueryBox,
+    const DirectX::SimpleMath::Matrix& instanceWorldMatrix,
     std::vector<DirectX::BoundingBox>& boxesToDrawDebug,
-    bool shouldAddDebugBox) const
+    bool shouldAddDebugBox,
+    DirectX::SimpleMath::Vector3 boxPadding) const // Recibimos el padding
 {
     for (const auto& meshPart : m_meshParts)
     {
-        // Opcional: Saltar si la AABB local de la parte de la malla es inválida o no tiene extensión.
-        // Esto asume que una AABB con Extents.x == 0 es considerada vacía/inválida para colisión.
+        // Opcional: Saltar si la AABB es inválida
         if (meshPart.localAABB.Extents.x == 0.0f &&
             meshPart.localAABB.Extents.y == 0.0f &&
             meshPart.localAABB.Extents.z == 0.0f) {
@@ -1012,33 +1053,32 @@ bool Model::CheckCollisionAgainstParts(
 
         DirectX::BoundingBox worldMeshPartBox;
 
-        // Paso 1: Transformar la AABB de la parte de la malla (que ya está en el espacio del nodo local del modelo)
-        // usando la matriz de mundo completa de la INSTANCIA.
-        // La 'meshPart.localNodeTransform' lleva los vértices de la malla a las coordenadas relativas al origen del modelo.
-        // Luego, 'instanceWorldMatrix' lleva esas coordenadas al espacio del mundo.
-        // Si 'meshPart.localAABB' ya fue calculada después de aplicar 'meshPart.localNodeTransform' (es decir, está en el espacio local del modelo completo):
-        //      meshPart.localAABB.Transform(worldMeshPartBox, instanceWorldMatrix);
-        // Si 'meshPart.localAABB' está en el espacio de la malla ANTES de 'meshPart.localNodeTransform':
+        // 1. Transformar la caja al espacio del mundo
         DirectX::SimpleMath::Matrix finalMeshPartTransform = meshPart.localNodeTransform * instanceWorldMatrix;
         meshPart.localAABB.Transform(worldMeshPartBox, finalMeshPartTransform);
 
+        // ---------------------------------------------------------
+        // 2. APLICAR EL PADDING (ESTO ES LO QUE FALTABA)
+        // ---------------------------------------------------------
+        // Sumamos el vector de "engorde" a las dimensiones de la caja.
+        worldMeshPartBox.Extents.x += boxPadding.x;
+        worldMeshPartBox.Extents.y += boxPadding.y; // Esto hará que crezca hacia arriba (y abajo)
+        worldMeshPartBox.Extents.z += boxPadding.z;
+        // ---------------------------------------------------------
 
+        // 3. Agregar a Debug (Ahora se dibujará la caja YA inflada)
         if (shouldAddDebugBox)
         {
             boxesToDrawDebug.push_back(worldMeshPartBox);
         }
 
+        // 4. Checar intersección con el jugador
         if (worldSpaceQueryBox.Intersects(worldMeshPartBox))
         {
-            // Opcional: Añadir un OutputDebugString aquí si quieres saber con qué parte específica hubo colisión
-            // wchar_t msg[256];
-            // swprintf_s(msg, L"    Colisión de Narrow Phase con MeshPart (Centro AABB: %.2f, %.2f, %.2f)\n", 
-            //    worldMeshPartBox.Center.x, worldMeshPartBox.Center.y, worldMeshPartBox.Center.z);
-            // OutputDebugString(msg);
-            return true; // Se detectó colisión con esta parte
+            return true; // ¡Choque detectado!
         }
     }
-    return false; // No se detectó colisión con ninguna parte de esta instancia
+    return false;
 }
 
 void Model::CalculateOverallBoundingSphere() {
@@ -1159,5 +1199,19 @@ void Model::ShadowDrawAlphaClip(
 
         // Dibujar la geometra de esta parte
         meshPart.DrawPrim(context);
+    }
+}
+
+void Model::SetSharedTextures(const std::vector<ID3D11ShaderResourceView*>& textures)
+{
+    // Recorremos los materiales del modelo
+    for (size_t i = 0; i < m_materials.size(); ++i)
+    {
+        // Si tenemos una textura compartida disponible para este índice...
+        if (i < textures.size() && textures[i] != nullptr)
+        {
+            // ...la asignamos, reemplazando la que cargó por defecto.
+            m_materials[i].diffuseTextureSRV = textures[i];
+        }
     }
 }
